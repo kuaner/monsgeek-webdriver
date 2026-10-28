@@ -19,7 +19,7 @@
         <img
           src={artwork}
           alt="M1W"
-          style={`width:${871 * scale}px;height:${288 * scale}px;left:${-116 * scale}px`}
+          style={`width:${638 * scale}px;height:${288 * scale}px;object-position:${-116 * scale}px 0`}
         />
         {#each definition.keys as key (key.index)}
           {@const knob = isKnobKey(key)}

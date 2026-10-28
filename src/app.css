@@ -242,6 +242,7 @@ input[type='color'] {
 .kb { position: relative; overflow: visible; }
 .kb img {
   position: absolute; top: 0;
+  object-fit: cover;
   user-select: none; -webkit-user-drag: none; pointer-events: none;
   filter: drop-shadow(0 22px 40px rgba(0, 0, 0, 0.5));
 }
@@ -435,7 +436,7 @@ button.kb-key.modified.selected:hover {
 
 /* ---------- 键位改键 popover ---------- */
 .key-popover {
-  position: fixed; z-index: 55; width: 360px;
+  position: fixed; z-index: 55; width: min(360px, calc(100vw - 20px));
   border: 1px solid var(--border-strong);
   border-radius: 13px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055),
@@ -510,6 +511,11 @@ button.key-chip.selected:hover { background: rgba(233, 234, 239, 0.2); }
 .busy-block { pointer-events: none; opacity: 0.55; }
 .foot-note { color: var(--dim); font-size: 11.5px; }
 @media (max-width: 600px) {
+  .topbar { flex-wrap: wrap; }
+  .topbar-status { flex: 1; min-width: 0; }
+  .topbar > .spacer { display: none; }
+  .topbar-actions { flex: 1 0 100%; flex-wrap: wrap; }
+  .kb-under { flex-wrap: wrap; }
   .layer-bar { align-items: flex-start; flex-direction: column; gap: 5px; }
   .macro-event { flex-wrap: wrap; }
 }

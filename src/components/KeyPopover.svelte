@@ -31,7 +31,7 @@
     const key = document.querySelector<HTMLElement>('.kb-key.selected')
     if (!key) return
     const rect = key.getBoundingClientRect()
-    const width = 396
+    const width = Math.min(360, window.innerWidth - 20)
     // 优先放在按键右侧并垂直居中；空间不足放左侧；再不行放下方。
     let left = rect.right + 12
     if (left + width > window.innerWidth - 10) left = rect.left - width - 12
