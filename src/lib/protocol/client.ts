@@ -290,13 +290,16 @@ export class M1WClient {
   /** 分配宏槽：优先独占复用本键原槽，否则取第一个空闲槽；失败还原原宏数据。 */
   async assignMacro(
     index: number, macro: KeyboardMacro, playback: number, requestedSlot: number | null = null,
+    options: { fn?: boolean } = {},
   ): Promise<ChangeResult> {
     if (!(index >= 0 && index < 126)) throw new ProtocolError('无效的矩阵编号。')
+    if (![0, 1, 2].includes(playback)) throw new ProtocolError('无效的宏播放方式。')
     const bytes = macroEncoded(macro)
     await this.requireProfile0()
     const matrix = await this.readMatrix({ verify: false })
     const fn = await this.readMatrix({ fn: true, verify: false })
-    const oldRecord = matrix.slice(index * 4, index * 4 + 4)
+    const targetMatrix = options.fn ? fn : matrix
+    const oldRecord = targetMatrix.slice(index * 4, index * 4 + 4)
     const all = matrix.concat(fn)
     const used: number[] = []
     for (let i = 0; i < all.length; i += 4) if (all[i] === 9) used.push(all[i + 2]!)
@@ -311,7 +314,7 @@ export class M1WClient {
     const oldBytes = await this.readMacro(slot)
     try {
       await this.writeMacro(slot, bytes)
-      const result = await this.setKey(index, [9, playback, slot, 0])
+      const result = await this.setKey(index, [9, playback, slot, 0], options)
       return { ...result, macroSlot: slot }
     } catch (original) {
       try {

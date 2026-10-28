@@ -11,9 +11,9 @@
 
   onMount(() => controller.start())
 
-  let importInput: HTMLInputElement
+  let importInput: HTMLInputElement | undefined = $state()
 
-  const alertStatus = $derived(/通信中断|失败|已还原/.test(controller.status))
+  const alertStatus = $derived(!!controller.errorMessage || /通信中断|失败|已还原/.test(controller.status))
 
   async function resetWithConfirm() {
     const ok = window.confirm(
@@ -22,6 +22,7 @@
   }
 
   const statusText = $derived.by(() => {
+    if (alertStatus) return controller.errorMessage ?? controller.status
     if (controller.connected && controller.info) {
       return `固件 ${infoFirmware(controller.info)} · 配置 ${infoProfile(controller.info)}` +
         (controller.canConfigure ? '' : ' · 只读')
@@ -66,7 +67,7 @@
         <button disabled={!controller.selectedProfileId} onclick={() => controller.exportProfile()}>导出</button>
       {/if}
       <button disabled={!controller.canConfigure} onclick={() => (controller.saveSheetOpen = true)}>保存配置…</button>
-      <button onclick={() => importInput.click()}>导入…</button>
+      <button onclick={() => importInput?.click()}>导入…</button>
       <input
         type="file" accept="application/json,.json" style="display:none" bind:this={importInput}
         onchange={(e) => {
@@ -90,13 +91,24 @@
 {/if}
 
 <!-- 键盘：唯一视觉主体（无边框） -->
+{#if controller.connected}
+  <div class="layer-bar">
+    <div class="layer-switch" role="group" aria-label="选择编辑层">
+      <button class:active={controller.layer === 'base'} aria-pressed={controller.layer === 'base'}
+        disabled={controller.busy} onclick={() => void controller.selectLayer('base')}>单按</button>
+      <button class:active={controller.layer === 'fn'} aria-pressed={controller.layer === 'fn'}
+        disabled={controller.busy} onclick={() => void controller.selectLayer('fn')}>Fn 组合</button>
+    </div>
+    <span class="caption">{controller.layer === 'fn' ? '设置 Fn + 按键，单按功能保留' : '设置单独按下时的作用'}</span>
+  </div>
+{/if}
 <KeyboardLayout />
 
 <div class="kb-under caption">
   {#if controller.connected}
-    点击按键改键<span class="sep">|</span>
+    {controller.layer === 'fn' ? '点击按键设置 Fn 组合，点击旋钮设置旋钮动作' : '点击按键或旋钮改键'}<span class="sep">|</span>
     <i class="dot" style="background:var(--accent)"></i>已选
-    <i class="dot amber" style="background:var(--amber)"></i>已改键
+    {#if controller.layer === 'base'}<i class="dot amber" style="background:var(--amber)"></i>已改键{/if}
   {:else}
     配置保存在本浏览器，可导出 JSON 与原生客户端互通；日常操作不会自动备份。
   {/if}

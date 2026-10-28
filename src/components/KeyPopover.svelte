@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { controller, definition, MAPPING_MODES, PLAYBACKS, keyDisplayName } from '../lib/state/controller.svelte'
+  import { controller, definition, PLAYBACKS, isKnobKey, keyDisplayName } from '../lib/state/controller.svelte'
   import { chooser } from '../lib/state/chooser.svelte'
   import { KEY_GROUPS, keyChoiceItems, keyGroup, usageChoices } from '../lib/state/actions'
   import { recordsEqual, usageName } from '../lib/protocol/core'
+  import { infoFirmwareRevision } from '../lib/protocol/core'
 
-  const enabled = $derived(controller.canConfigure && controller.matrix !== null)
+  const enabled = $derived(controller.canEditKey)
   const isModified = $derived(
-    !!controller.selectedKey && !!controller.currentRecord &&
+    controller.layer === 'base' && !!controller.selectedKey && !!controller.currentRecord &&
     !recordsEqual(controller.currentRecord, controller.selectedKey.record))
+  const modifiers: Array<[number, string]> = [[227, '⌘'], [224, '⌃'], [226, '⌥'], [225, '⇧']]
   let position = $state({ top: 0, left: 0, ready: false })
   let keyTab = $state('字母')
 
@@ -16,7 +18,7 @@
 
   // 打开/换键时，页签落到当前所选按键所在的组。
   $effect(() => {
-    if (!controller.remapOpen) return
+    if (!controller.remapOpen || controller.macroSheetOpen) return
     const action = controller.choices.find((a) => a.id === controller.selectedAction)
     if (action && controller.mappingMode === 'key' && action.record[0] === 0 &&
         action.record[1] === 0 && action.record[3] === 0) {
@@ -27,7 +29,6 @@
   function reposition() {
     if (!controller.remapOpen) return
     const key = document.querySelector<HTMLElement>('.kb-key.selected')
-      ?? document.querySelector<HTMLElement>('.knob-chip.selected')
     if (!key) return
     const rect = key.getBoundingClientRect()
     const width = 396
@@ -47,20 +48,26 @@
   })
 
   function onGlobalPointerDown(event: PointerEvent) {
-    if (!controller.remapOpen) return
+    if (!controller.remapOpen || controller.macroSheetOpen) return
     const target = event.target as HTMLElement
     // 点其他键/旋钮 = 切换目标；点 popover 内部 = 编辑；其余一律关闭。
-    if (target.closest('.kb-key, .knob-chip, .key-popover, #chooser')) return
+    if (target.closest('.kb-key, .key-popover, .layer-switch, #chooser')) return
     controller.closeRemap()
   }
 </script>
 
-<svelte:window onresize={() => reposition()} onpointerdown={onGlobalPointerDown} onkeydown={(e) => e.key === 'Escape' && controller.closeRemap()} />
+<svelte:window onresize={() => reposition()} onpointerdown={onGlobalPointerDown} onkeydown={(e) => e.key === 'Escape' && !controller.macroSheetOpen && controller.closeRemap()} />
 
-{#if controller.remapOpen && position.ready}
+{#if controller.remapOpen && !controller.macroSheetOpen && position.ready}
   <div class="key-popover" style={`top:${position.top}px;left:${position.left}px`} role="dialog" aria-label="改键">
     <header class="kp-head">
-      {#if isModified}
+      {#if controller.layer === 'fn'}
+        <div class="kp-layer-title">
+          <b>Fn + {controller.selectedKey ? keyDisplayName(controller.selectedKey) : '—'}</b>
+          <span>当前：{controller.currentMapping}</span>
+          <span>单按：{controller.baseMapping}（保留）</span>
+        </div>
+      {:else if isModified}
         <div class="kp-map">
           <b>{controller.selectedKey ? keyDisplayName(controller.selectedKey) : '—'}</b>
           <svg class="kp-arrow" width="26" height="14" viewBox="0 0 26 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -74,12 +81,23 @@
       <button class="ghost kp-close" onclick={() => controller.closeRemap()} aria-label="关闭改键">关闭</button>
     </header>
 
+    {#if controller.selectedKey?.name === 'FN'}
+      <p class="kp-hint">Fn 是组合键的入口，请选择其他按键设置其单按或 Fn 组合。</p>
+    {:else if controller.layer === 'fn' && controller.info && infoFirmwareRevision(controller.info) !== 0x0108}
+      <p class="kp-hint">此固件的 Fn 写入尚未验证，当前可读取 Fn 映射。</p>
+    {:else if controller.layer === 'fn' && controller.currentRecord && !controller.canEditKey && !controller.busy}
+      <p class="kp-hint">这个原厂动作暂不能安全编辑，当前值会保留。</p>
+    {:else if controller.layer === 'base' && controller.selectedKey && !isKnobKey(controller.selectedKey)}
+      <p class="kp-hint">设置单独按下的作用。要保留它并增加快捷操作，请切换到 Fn 组合。</p>
+    {/if}
+
     <div class="seg kp-seg">
-      {#each MAPPING_MODES as mode (mode.id)}
+      {#each controller.availableModes as mode (mode.id)}
         <button
           class:active={controller.mappingMode === mode.id}
+          disabled={!enabled}
           onclick={() => controller.chooseMode(mode.id)}
-        >{mode.label}</button>
+        >{controller.layer === 'base' && mode.id === 'function' ? '旋钮动作' : mode.label}</button>
       {/each}
     </div>
 
@@ -112,7 +130,8 @@
             e.currentTarget,
             controller.choices.map((a) => ({
               id: a.id,
-              label: a.category !== '其他' ? `${a.category} · ${a.name}` : a.name,
+              label: a.name,
+              group: a.category,
             })),
             controller.selectedAction,
             (id) => (controller.selectedAction = id),
@@ -122,7 +141,7 @@
         </button>
       {:else if controller.mappingMode === 'chord'}
         <div class="mod-row" style="margin-bottom:10px">
-          {#each [[227, '⌘'], [224, '⌃'], [226, '⌥'], [225, '⇧']] as [usage, label] (usage)}
+          {#each modifiers as [usage, label] (usage)}
             <label>
               <input
                 type="checkbox"
@@ -153,15 +172,18 @@
             <span>{controller.chordSecondary === 0 ? '无' : usageName(controller.chordSecondary, definition)}</span>
           </button>
         </div>
-      {:else}
+      {:else if controller.mappingMode === 'macro'}
+        <p class="kp-hint">按一次 Fn 组合，依次执行录制的按键，例如 Command + C。</p>
         <div class="row">
           <span class="caption">
             {controller.macroLoading
               ? '正在读取键盘中的宏…'
+              : controller.macroError
+                ? controller.macroError
               : `${controller.macro.events.length} 个事件 · ${PLAYBACKS.find((p) => p.rawValue === controller.playback)?.label ?? ''}`}
           </span>
           <span class="spacer"></span>
-          <button disabled={!enabled || controller.macroLoading} onclick={() => (controller.macroSheetOpen = true)}>
+          <button disabled={!enabled || controller.macroLoading || !!controller.macroError} onclick={() => (controller.macroSheetOpen = true)}>
             编辑宏…
           </button>
         </div>
@@ -169,14 +191,17 @@
     </div>
 
     <footer class="kp-foot">
-      <button class="ghost" disabled={!enabled} onclick={() => void controller.applyKey(true)}>恢复该键</button>
+      {#if controller.layer === 'base'}
+        <button class="ghost" disabled={!enabled} onclick={() => void controller.applyKey(true)}>恢复该键</button>
+      {/if}
       <span class="spacer"></span>
       <button
         class="primary"
-        disabled={!enabled || (controller.mappingMode === 'macro' && controller.macroLoading)}
+        disabled={!enabled || (controller.mappingMode === 'macro' && (controller.macroLoading || !!controller.macroError || controller.macro.events.length === 0)) ||
+          ((controller.mappingMode === 'key' || controller.mappingMode === 'function') && !controller.selectedAction)}
         onclick={() => void controller.applyKey(false)}
       >
-        应用改键
+        {controller.layer === 'fn' ? '应用 Fn 组合' : '应用改键'}
       </button>
     </footer>
   </div>

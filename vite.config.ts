@@ -2,13 +2,13 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
-import { version } from './package.json'
+import packageInfo from './package.json' with { type: 'json' }
 
 // 127.0.0.1:8765 是既定的 WebHID 授权源：dev/preview 固定此端口；
 // GitHub Pages 部署用相对 base，任意子路径可用。
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(version),
+    __APP_VERSION__: JSON.stringify(packageInfo.version),
   },
   base: process.env.GITHUB_PAGES ? './' : '/',
   plugins: [

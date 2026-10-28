@@ -2,7 +2,7 @@
 // 移植自 native M1WCore（Swift），线上行为已在真机验证；纯逻辑、可在 node 测试。
 
 import type {
-  Checksum, DeviceDefinition, DeviceInfo, Frame, KeyAction, KeyRecord,
+  Checksum, DeviceDefinition, DeviceInfo, Frame, KeyAction, KeyRecord, PhysicalKey,
   KeyboardMacro, LightSettings, Snapshot,
 } from './types'
 import { BIT7, BIT8, NONE } from './types'
@@ -63,8 +63,13 @@ const WRITABLE_TYPES = [0, 3, 8, 9, 10, 13, 14]
 
 /** 可安全写入键盘的记录类型；宏记录的槽号必须 < 50。 */
 export function validateKeyRecord(record: KeyRecord): void {
+  // This exact action was observed on this keyboard and is named by the vendor.
+  // Do not allow unrelated, unverified type-18 actions through the whitelist.
+  const siri = Array.isArray(record) && record.length === 4 &&
+    record.every((byte, index) => byte === [18, 0, 227, 44][index])
   if (!Array.isArray(record) || record.length !== 4 ||
-      !WRITABLE_TYPES.includes(record[0]!) ||
+      !record.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255) ||
+      (!WRITABLE_TYPES.includes(record[0]!) && !siri) ||
       (record[0] === 9 && record[2]! >= 50)) {
     throw new ProtocolError('不支持的按键记录。')
   }
@@ -295,11 +300,19 @@ export const KEY_FUNCTIONS: KeyAction[] = [
   { id: 'light-group-pgdn', name: '切换灯效组 · PgDn', category: '灯光', record: [13, 1, 6, 0] },
   { id: 'light-group-end', name: '切换灯效组 · End', category: '灯光', record: [13, 1, 7, 0] },
   { id: 'play', name: '播放 / 暂停', category: '媒体', record: [3, 0, 205, 0] },
+  { id: 'stop', name: '停止播放', category: '媒体', record: [3, 0, 183, 0] },
   { id: 'mute', name: '静音', category: '媒体', record: [3, 0, 226, 0] },
   { id: 'previous', name: '上一曲', category: '媒体', record: [3, 0, 182, 0] },
   { id: 'next', name: '下一曲', category: '媒体', record: [3, 0, 181, 0] },
   { id: 'volume-up', name: '音量 +', category: '媒体', record: [3, 0, 233, 0] },
   { id: 'volume-down', name: '音量 −', category: '媒体', record: [3, 0, 234, 0] },
+  { id: 'player', name: '打开播放器', category: '系统', record: [3, 0, 131, 1] },
+  { id: 'email', name: '打开邮件', category: '系统', record: [3, 0, 138, 1] },
+  { id: 'computer', name: '打开我的电脑', category: '系统', record: [3, 0, 148, 1] },
+  { id: 'browser-home', name: '浏览器主页', category: '系统', record: [3, 0, 35, 2] },
+  { id: 'display-dimmer', name: '屏幕亮度 −', category: '系统', record: [3, 0, 112, 0] },
+  { id: 'display-brighter', name: '屏幕亮度 +', category: '系统', record: [3, 0, 111, 0] },
+  { id: 'siri', name: '呼出 Siri', category: '系统', record: [18, 0, 227, 44] },
   { id: 'disabled', name: '禁用', category: '其他', record: [0, 0, 0, 0] },
 ]
 
@@ -396,6 +409,9 @@ export function recordLabel(record: KeyRecord | null, definition: DeviceDefiniti
     const playback = PLAYBACKS.find((p) => p.rawValue === record[1])
     return `宏 ${record[2]! + 1} · ${playback ? playback.label : '未知模式'}`
   }
+  if (record[0] === 8 && record[1] === 0 && record[2] === 4 && record[3]! <= 4) {
+    return `切换键盘配置 ${record[3]! + 1}`
+  }
   const original = definition.keys.find((k) =>
     recordsEqual(definition.defaultFnMatrix.slice(k.index * 4, k.index * 4 + 4), record))
   if (original) return `原厂 Fn + ${keyDisplayName(original)}`
@@ -424,7 +440,7 @@ export const PLAYBACKS = [
 
 export function macroEncoded(macro: KeyboardMacro): number[] {
   const { repeatCount, events } = macro
-  if (!(repeatCount >= 1 && repeatCount <= 65535) || events.length === 0 || events.length > 62) {
+  if (!Number.isInteger(repeatCount) || !(repeatCount >= 1 && repeatCount <= 65535) || events.length === 0 || events.length > 62) {
     throw new ProtocolError('宏需包含 1…62 个按下/松开事件，重复次数为 1…65535。')
   }
   const bytes = new Array(256).fill(0)
@@ -432,11 +448,17 @@ export function macroEncoded(macro: KeyboardMacro): number[] {
   bytes[1] = repeatCount >> 8
   const held = new Set<number>()
   events.forEach((event, i) => {
-    if (!(event.usage >= 4 && event.usage <= 239) || !(event.delay >= 0 && event.delay <= 65535)) {
+    if (!Number.isInteger(event.usage) || !Number.isInteger(event.delay) ||
+        !(event.usage >= 4 && event.usage <= 239) || !(event.delay >= 0 && event.delay <= 65535)) {
       throw new ProtocolError('宏按键或延时超出范围。')
     }
-    if (event.down) held.add(event.usage)
-    else held.delete(event.usage)
+    if (event.down) {
+      if (held.has(event.usage)) throw new ProtocolError(`第 ${i + 1} 个事件重复按下，需先松开。`)
+      held.add(event.usage)
+    } else {
+      if (!held.has(event.usage)) throw new ProtocolError(`第 ${i + 1} 个事件在按下之前松开。`)
+      held.delete(event.usage)
+    }
     const offset = 2 + i * 4
     bytes[offset] = event.usage
     bytes[offset + 1] = event.down ? 128 : 0

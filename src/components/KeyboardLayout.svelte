@@ -6,7 +6,7 @@
   let wrapWidth = $state(0)
   let viewportHeight = $state(window.innerHeight)
   // 键盘是唯一主体：在可用宽度和高度内尽可能大。
-  const scale = $derived(Math.min((wrapWidth - 12) / 638, (viewportHeight - 165) / 288))
+  const scale = $derived(Math.min((wrapWidth - 12) / 638, (viewportHeight - 205) / 288))
   const connected = $derived(controller.connected)
 </script>
 
@@ -22,21 +22,24 @@
           style={`width:${871 * scale}px;height:${288 * scale}px;left:${-116 * scale}px`}
         />
         {#each definition.keys as key (key.index)}
-          {@const extra = isKnobKey(key) ? 1 : 10}
-          {@const record = controller.matrix
-            ? controller.matrix.slice(key.index * 4, key.index * 4 + 4)
+          {@const knob = isKnobKey(key)}
+          {@const extra = knob ? 1 : 10}
+          {@const keyMatrix = knob ? controller.matrix : controller.activeMatrix}
+          {@const record = keyMatrix
+            ? keyMatrix.slice(key.index * 4, key.index * 4 + 4)
             : null}
-          {@const modified = record !== null && !recordsEqual(record, key.record)}
-          {@const label = record ? recordLabel(record, definition) : '未读取'}
+          {@const modified = controller.layer === 'base' && record !== null && !recordsEqual(record, key.record)}
+          {@const label = record ? (controller.layer === 'fn' && !knob && record.every((b) => b === 0) ? '未设置' : recordLabel(record, definition)) : '未读取'}
           <button
             class="kb-key"
             class:selected={controller.selectedKeyIndex === key.index}
             class:modified={modified}
             style={`left:${(key.x - 116 - extra / 2) * scale}px;top:${(-key.y - 2) * scale}px;width:${(key.width + extra) * scale}px;height:${(key.height + 4) * scale}px`}
-            title={`${keyDisplayName(key)} → ${label}`}
+            title={`${controller.layer === 'fn' && !knob ? 'Fn + ' : ''}${keyDisplayName(key)} → ${label}`}
+            disabled={controller.busy}
             onclick={() => controller.selectKey(key.index, true)}
           >
-            {#if modified && !isKnobKey(key)}
+            {#if modified && !knob}
               <span class="tag">{label}</span>
             {/if}
           </button>

@@ -21,8 +21,8 @@ async function openDevice(device: HIDDevice, timeoutMs = 3000): Promise<void> {
 }
 
 function hasVendorFeatureCollection(device: HIDDevice): boolean {
-  const walk = (collections: HIDCollection[]): boolean =>
-    (collections ?? []).some((c) => c.usagePage === 0xffff || walk(c.collections ?? []))
+  const walk = (collections: HIDCollectionInfo[]): boolean =>
+    (collections ?? []).some((c) => (c.usagePage === 0xffff && c.usage === 0x0002) || walk(c.children ?? []))
   return walk(device.collections ?? [])
 }
 

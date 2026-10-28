@@ -5,9 +5,9 @@
 import definitionJson from '../assets/m1w.json'
 import { M1WClient } from '../protocol/client'
 import {
-  allActions, chord, isKnobKey, keyDisplayName, macroDecoded, macroEncoded,
+  allActions, chord, isKnobKey, keyDisplayName, macroDecoded, macroEncoded, validateKeyRecord,
   infoDeviceID, infoFirmware, infoFirmwareRevision, infoLightsEnabled, infoLight,
-  infoProfile, infoSupportsConfiguration, lightUISpeed, mergeInfo, PLAYBACKS,
+  infoProfile, infoSupportsConfiguration, infoKeyboardOptions, lightUISpeed, mergeInfo, PLAYBACKS,
   recordsEqual, recordLabel, snapshotValidatedMatrix,
 } from '../protocol/core'
 import type {
@@ -22,6 +22,9 @@ export const MAPPING_MODES = [
   { id: 'macro', label: '宏' },
 ] as const
 export type MappingMode = (typeof MAPPING_MODES)[number]['id']
+export type KeyboardLayer = 'base' | 'fn'
+
+type OperationResult = { matrix?: number[] | null; fnMatrix?: number[] | null; saved?: boolean; skipMappingSync?: boolean }
 
 export const EFFECTS: Array<[number, string]> = [
   [1, '常亮'], [2, '呼吸'], [3, '霓虹'], [4, '波浪'], [5, '涟漪'], [6, '雨滴'], [7, '贪吃蛇'],
@@ -62,9 +65,12 @@ function loadProfiles(): StoredProfile[] {
 class Controller {
   busy = $state(false)
   status = $state('连接 M1W 数据线并切到有线模式')
+  errorMessage: string | null = $state(null)
   connected = $state(false)
   info: DeviceInfo | null = $state(null)
   matrix: number[] | null = $state(null)
+  fnMatrix: number[] | null = $state(null)
+  layer: KeyboardLayer = $state('base')
 
   selectedKeyIndex = $state(-1) // 未选择任何按键；点击键盘图后才选中
   remapOpen = $state(false)
@@ -77,6 +83,7 @@ class Controller {
   macro: KeyboardMacro = $state({ repeatCount: 1, events: [] })
   playback = $state(0)
   macroLoading = $state(false)
+  macroError: string | null = $state(null)
   macroSheetOpen = $state(false)
   saveSheetOpen = $state(false)
   profileName = $state('我的配置')
@@ -88,7 +95,6 @@ class Controller {
   lightRainbow = $state(true)
   lightDirty = $state(false)
   lightPanelOpen = $state(false)
-  knobPanelOpen = $state(false)
 
   profiles: StoredProfile[] = $state(loadProfiles())
   selectedProfileId = $state('')
@@ -100,6 +106,7 @@ class Controller {
   private polling = false
   private timer: ReturnType<typeof setInterval> | null = null
   private selftestRan = false
+  private macroRequest = 0
 
   // ---- 派生状态 ----
 
@@ -120,23 +127,58 @@ class Controller {
     return definition.keys.find((k) => k.index === this.selectedKeyIndex) ?? null
   }
 
+  get activeMatrix(): number[] | null {
+    return this.layer === 'fn' ? this.fnMatrix : this.matrix
+  }
+
+  get availableModes() {
+    if (this.layer === 'fn') return MAPPING_MODES
+    // A rotary encoder has no normal typing action. Keep its existing controls.
+    return MAPPING_MODES.filter((mode) => mode.id === 'key' || mode.id === 'chord' ||
+      (mode.id === 'function' && !!this.selectedKey && isKnobKey(this.selectedKey)))
+  }
+
+  get canEditKey(): boolean {
+    if (!this.canConfigure || this.busy || !this.selectedKey || !this.currentRecord || this.selectedKey.name === 'FN') return false
+    // Fn writes have been verified on 1.08; other revisions remain readable.
+    if (this.layer === 'fn') {
+      if (infoFirmwareRevision(this.info!) !== 0x0108) return false
+      try { validateKeyRecord(this.currentRecord) } catch { return false }
+    }
+    return true
+  }
+
+  get baseMapping(): string {
+    const i = this.selectedKeyIndex * 4
+    return this.matrix && i >= 0 ? recordLabel(this.matrix.slice(i, i + 4), definition) : '未读取'
+  }
+
+  get fnMapping(): string {
+    const i = this.selectedKeyIndex * 4
+    if (!this.fnMatrix || i < 0) return '切换到 Fn 组合后读取'
+    const record = this.fnMatrix.slice(i, i + 4)
+    return record.every((byte) => byte === 0) ? '未设置' : recordLabel(record, definition)
+  }
+
   get currentRecord(): KeyRecord | null {
-    return this.matrix && this.selectedKeyIndex >= 0 && this.selectedKeyIndex < 126
-      ? this.matrix.slice(this.selectedKeyIndex * 4, this.selectedKeyIndex * 4 + 4)
+    return this.activeMatrix && this.selectedKeyIndex >= 0 && this.selectedKeyIndex < 126
+      ? this.activeMatrix.slice(this.selectedKeyIndex * 4, this.selectedKeyIndex * 4 + 4)
       : null
   }
 
   get currentMapping(): string {
     const record = this.currentRecord
+    if (this.layer === 'fn' && record?.every((byte) => byte === 0)) return '未设置'
     return record ? recordLabel(record, definition) : '未读取'
   }
 
   get choices() {
-    // 按键 = 纯物理键；功能 = 媒体/灯光快捷/旋钮/禁用（对应原版按键设置里的功能列表）。
+    // 旋钮专用动作只在旋钮的功能列表中提供；仍可显示已有的映射。
     return actions.filter((action) => {
       switch (this.mappingMode) {
         case 'key': return action.category === '按键' && action.record[0] === 0
-        case 'function': return action.category !== '按键'
+        case 'function': return action.category !== '按键' &&
+          (action.category !== '旋钮' || (!!this.selectedKey && isKnobKey(this.selectedKey)))
         default: return false
       }
     })
@@ -171,23 +213,32 @@ class Controller {
     if (this.connection && !this.connection.connected) {
       this.connected = false
       this.matrix = null
+      this.fnMatrix = null
+      this.macroRequest++
       this.status = '键盘连接已断开，正在等待重新连接…'
     }
   }
 
   async connectByPicker(): Promise<void> {
-    await this.connection!.requestAndConnect()
-    await this.refresh()
-    if (SELFTEST && !this.selftestRan) await this.selfTest()
+    try {
+      this.errorMessage = null
+      await this.connection!.requestAndConnect()
+      await this.refresh()
+      if (SELFTEST && !this.selftestRan) await this.selfTest()
+    } catch (error) {
+      this.errorMessage = error instanceof Error ? error.message : String(error)
+      this.status = this.errorMessage
+    }
   }
 
-  private async run<T>(
+  private async run<T extends OperationResult>(
     label: string,
-    operation: (client: M1WClient) => Promise<T & { matrix?: number[] | null; saved?: boolean }>,
-    options: { refreshMatrix?: boolean; fullInfo?: boolean } = {},
-  ): Promise<(T & { matrix?: number[] | null; saved?: boolean }) | null> {
+    operation: (client: M1WClient) => Promise<T>,
+    options: { refreshMatrix?: boolean; refreshFn?: boolean; fullInfo?: boolean } = {},
+  ): Promise<T | null> {
     if (this.busy) return null
     this.busy = true
+    this.errorMessage = null
     this.status = label
     try {
       const outcome = await usbQueue(async () => {
@@ -196,6 +247,9 @@ class Controller {
         if (!result.matrix && options.refreshMatrix) {
           result.matrix = await client.readMatrix({ verify: false })
         }
+        if (!result.fnMatrix && options.refreshFn) {
+          result.fnMatrix = await client.readMatrix({ fn: true, verify: false })
+        }
         return {
           ...result,
           info: await (options.fullInfo ? client.info() : client.liveInfo()),
@@ -203,10 +257,9 @@ class Controller {
       })
       this.connected = true
       this.info = this.info ? mergeInfo(this.info, outcome.info as DeviceInfo) : (outcome.info as DeviceInfo)
-      if (outcome.matrix) {
-        this.matrix = outcome.matrix
-        this.syncMapping()
-      }
+      if (outcome.matrix) this.matrix = outcome.matrix
+      if (outcome.fnMatrix) this.fnMatrix = outcome.fnMatrix
+      if ((outcome.matrix || outcome.fnMatrix) && !outcome.skipMappingSync) this.syncMapping()
       this.syncLight()
       this.status = (outcome as { saved?: boolean }).saved ? '配置已手动保存' : '已同步键盘'
       return outcome
@@ -215,9 +268,12 @@ class Controller {
       this.status = /Failed to (write|read)/i.test(text)
         ? '键盘通信中断。请点击右上角「连接键盘」重新授权，即可恢复。'
         : text
+      this.errorMessage = this.status
       if (!this.connection?.connected || /未连接|NotFound|Network|not open/i.test(this.status)) {
         this.connected = false
         this.matrix = null
+        this.fnMatrix = null
+        this.macroRequest++
       }
       return null
     } finally {
@@ -228,11 +284,12 @@ class Controller {
   async refresh(): Promise<void> {
     await this.run('正在读取键盘…', async (client) => {
       const info = await client.info()
-      const result: { matrix?: number[] | null; fullInfo?: boolean } = {}
+      const result: OperationResult = {}
       if (infoSupportsConfiguration(info) && infoProfile(info) === 0) {
         result.matrix = await client.readMatrix({ verify: false })
+        if (this.layer === 'fn' || this.fnMatrix) result.fnMatrix = await client.readMatrix({ fn: true, verify: false })
       }
-      return result as { matrix?: number[] | null }
+      return result
     }, { fullInfo: true })
   }
 
@@ -246,6 +303,8 @@ class Controller {
           if (this.connected) {
             this.connected = false
             this.matrix = null
+            this.fnMatrix = null
+            this.macroRequest++
             this.status = '键盘连接已断开，正在等待重新连接…'
           }
           return
@@ -254,25 +313,33 @@ class Controller {
       const prevConnected = this.connected
       const prevFirmware = this.info ? infoFirmwareRevision(this.info) : null
       const prevProfile = this.info ? infoProfile(this.info) : null
+      const prevSystem = this.info ? (infoKeyboardOptions(this.info)?.[2] ?? 0) & 2 : null
       const needsMatrix = this.matrix === null || !prevConnected
       const needsInfo = this.info === null || !prevConnected
-      const { info, matrix } = await usbQueue(async () => {
+      const needsFn = this.layer === 'fn' || this.fnMatrix !== null
+      const { info, matrix, fnMatrix, changed } = await usbQueue(async () => {
         const client = new M1WClient(this.connection!.transport())
         const info = await (needsInfo ? client.info() : client.liveInfo())
-        const changed = infoFirmwareRevision(info) !== prevFirmware || infoProfile(info) !== prevProfile
+        const system = (infoKeyboardOptions(info)?.[2] ?? 0) & 2
+        const changed = infoFirmwareRevision(info) !== prevFirmware || infoProfile(info) !== prevProfile || system !== prevSystem
         let matrix: number[] | null = null
+        let fnMatrix: number[] | null = null
         if (infoSupportsConfiguration(info) && infoProfile(info) === 0 && (needsMatrix || changed)) {
           matrix = await client.readMatrix({ verify: false })
         }
-        return { info, matrix }
+        if (infoSupportsConfiguration(info) && infoProfile(info) === 0 && needsFn && (needsMatrix || changed || !this.fnMatrix)) {
+          fnMatrix = await client.readMatrix({ fn: true, verify: false })
+        }
+        return { info, matrix, fnMatrix, changed }
       })
+      if (this.busy) return
       this.connected = true
       this.info = this.info ? mergeInfo(this.info, info) : info
-      if (matrix) {
-        this.matrix = matrix
-        this.syncMapping()
-      }
-      if (!infoSupportsConfiguration(info) || infoProfile(info) !== 0) this.matrix = null
+      if (changed) this.fnMatrix = null
+      if (matrix) this.matrix = matrix
+      if (fnMatrix) this.fnMatrix = fnMatrix
+      if (matrix || fnMatrix) this.syncMapping()
+      if (!infoSupportsConfiguration(info) || infoProfile(info) !== 0) { this.matrix = null; this.fnMatrix = null }
       this.syncLight()
       if (!prevConnected) this.status = '已连接并同步键盘'
       if (SELFTEST && !this.selftestRan) await this.selfTest()
@@ -280,6 +347,8 @@ class Controller {
       if (!(await this.connection!.heal())) {
         this.connected = false
         this.matrix = null
+        this.fnMatrix = null
+        this.macroRequest++
         this.status = '键盘通信中断。请点击右上角「连接键盘」重新授权，即可恢复。'
       }
     } finally {
@@ -289,9 +358,35 @@ class Controller {
 
   // ---- 键位选择与改键 ----
 
-  selectKey(index: number, openEditor = false): void {
-    this.selectedKeyIndex = index
+  async selectLayer(layer: KeyboardLayer): Promise<void> {
+    if (this.busy) return
+    if (layer === 'fn' && this.selectedKey && isKnobKey(this.selectedKey)) {
+      this.selectedKeyIndex = -1
+      this.remapOpen = false
+    }
+    this.layer = layer
+    this.macroRequest++
     this.macroLoading = false
+    this.macroError = null
+    if (layer === 'fn' && !this.fnMatrix) {
+      await this.run('正在读取 Fn 组合…', async (client) => ({
+        fnMatrix: await client.readMatrix({ fn: true, verify: false }),
+      }))
+    } else {
+      this.syncMapping()
+    }
+  }
+
+  selectKey(index: number, openEditor = false): void {
+    if (this.busy || this.macroSheetOpen) return
+    const key = definition.keys.find((item) => item.index === index)
+    if (!key) return
+    if (isKnobKey(key)) this.layer = 'base'
+    this.selectedKeyIndex = index
+    this.errorMessage = null
+    this.macroRequest++
+    this.macroLoading = false
+    this.macroError = null
     this.syncMapping()
     if (openEditor) this.remapOpen = true
   }
@@ -303,10 +398,18 @@ class Controller {
   private syncMapping(): void {
     const record = this.currentRecord
     if (!record) return
-    if (record[0] === 9) {
+    this.macroRequest++
+    this.macroLoading = false
+    this.macroError = null
+    if (this.layer === 'fn' && record.every((byte) => byte === 0)) {
+      this.mappingMode = 'function'
+      this.selectedAction = ''
+      return
+    }
+    if (record[0] === 9 && this.layer === 'fn') {
       this.mappingMode = 'macro'
       this.playback = PLAYBACKS.some((p) => p.rawValue === record[1]) ? record[1]! : 0
-      void this.fetchMacro(record[2]!, this.selectedKeyIndex)
+      void this.fetchMacro(record[2]!, this.selectedKeyIndex, this.layer)
       return
     }
     if (record[0] === 0 && (record[1] !== 0 || record[3] !== 0)) {
@@ -317,31 +420,35 @@ class Controller {
       return
     }
     let action = actions.find((a) => recordsEqual(a.record, record) && a.category !== '按键')
-    if (action) {
-      this.selectedAction = action.id
+    if (action && this.availableModes.some((mode) => mode.id === 'function')) {
+      const actionId = action.id
       this.mappingMode = 'function'
+      this.selectedAction = this.choices.some((choice) => choice.id === actionId) ? actionId : ''
       return
     }
     action = actions.find((a) => recordsEqual(a.record, record))
-    if (action) {
+    if (action && action.category === '按键') {
       this.selectedAction = action.id
       this.mappingMode = 'key'
       return
     }
     this.selectedAction = ''
-    this.mappingMode = 'function'
+    this.mappingMode = 'key'
   }
 
   chooseMode(mode: MappingMode): void {
+    if (this.busy || !this.availableModes.some((item) => item.id === mode)) return
+    this.macroRequest++
+    this.macroLoading = false
+    this.macroError = null
     if (mode === 'macro' && this.mappingMode !== 'macro' && this.currentRecord?.[0] !== 9) {
       this.macro = { repeatCount: 1, events: [] }
       this.playback = 0
     }
     this.mappingMode = mode
-    if (!this.choices.some((a) => a.id === this.selectedAction)) {
-      const key = this.selectedKey
-      this.selectedAction = this.choices.find((a) => key && recordsEqual(a.record, key.record))?.id
-        ?? this.choices[0]?.id ?? ''
+    this.selectedAction = this.choices.find((a) => recordsEqual(a.record, this.currentRecord))?.id ?? ''
+    if (mode === 'macro' && this.currentRecord?.[0] === 9) {
+      void this.fetchMacro(this.currentRecord[2]!, this.selectedKeyIndex, this.layer)
     }
   }
 
@@ -353,38 +460,52 @@ class Controller {
     }
   }
 
-  private async fetchMacro(slot: number, keyIndex: number): Promise<void> {
+  private async fetchMacro(slot: number, keyIndex: number, layer: KeyboardLayer): Promise<void> {
+    const request = ++this.macroRequest
     this.macroLoading = true
-    this.macro = { repeatCount: 1, events: [] }
+    this.macroError = null
     try {
       const bytes = await usbQueue(async () => {
         const client = new M1WClient(this.connection!.transport())
         return client.readMacro(slot)
       })
-      this.macro = macroDecoded(bytes)
+      const macro = macroDecoded(bytes)
+      if (request !== this.macroRequest || this.selectedKeyIndex !== keyIndex || this.layer !== layer) return
+      this.macro = macro
     } catch (error) {
-      this.status = error instanceof Error ? error.message : String(error)
+      if (request !== this.macroRequest || this.selectedKeyIndex !== keyIndex || this.layer !== layer) return
+      this.macroError = error instanceof Error ? error.message : String(error)
     } finally {
-      this.macroLoading = false
-      if (this.selectedKeyIndex !== keyIndex) return
+      if (request === this.macroRequest && this.selectedKeyIndex === keyIndex && this.layer === layer) {
+        this.macroLoading = false
+      }
     }
   }
 
   async applyKey(factory = false): Promise<void> {
     const key = this.selectedKey
-    if (!key || !this.matrix) return
+    const targetMatrix = this.activeMatrix
+    const targetIndex = this.selectedKeyIndex
+    const targetLayer = this.layer
+    const isFn = targetLayer === 'fn'
+    if (!key || !targetMatrix || !this.canEditKey || (factory && isFn)) return
     if (this.mappingMode === 'macro' && !factory) {
+      if (!isFn || this.macroLoading || this.macroError) return
+      const macro = { repeatCount: this.macro.repeatCount, events: this.macro.events.map((event) => ({ ...event })) }
+      const playback = this.playback
       try {
-        macroEncoded(this.macro)
+        macroEncoded(macro)
       } catch (error) {
         this.status = error instanceof Error ? error.message : String(error)
+        this.errorMessage = this.status
         return
       }
-      await this.run('正在写入宏与按键…', async (client) => {
-        const result = await client.assignMacro(this.selectedKeyIndex, this.macro, this.playback)
+      await this.run('正在设置 Fn 组合宏…', async (client) => {
+        const result = await client.assignMacro(targetIndex, macro, playback, null, { fn: true })
         if (result.macroSlot == null) throw new Error('宏槽返回值缺失。')
         return {
-          matrix: withRecord(this.matrix!, this.selectedKeyIndex, [9, this.playback, result.macroSlot, 0]),
+          fnMatrix: withRecord(targetMatrix, targetIndex, [9, playback, result.macroSlot, 0]),
+          skipMappingSync: true,
         }
       })
       return
@@ -395,17 +516,19 @@ class Controller {
       else if (this.mappingMode === 'chord') {
         record = chord(this.chordKey, [...this.chordModifiers].sort((a, b) => a - b), this.chordSecondary)
       } else {
-        const action = actions.find((a) => a.id === this.selectedAction)
+        const action = this.choices.find((a) => a.id === this.selectedAction)
         if (!action) throw new Error('请先选择目标功能。')
         record = action.record
       }
     } catch (error) {
       this.status = error instanceof Error ? error.message : String(error)
+      this.errorMessage = this.status
       return
     }
-    await this.run('正在改键…', async (client) => {
-      await client.setKey(this.selectedKeyIndex, record)
-      return { matrix: withRecord(this.matrix!, this.selectedKeyIndex, record) }
+    await this.run(isFn ? '正在设置 Fn 组合…' : '正在改键…', async (client) => {
+      await client.setKey(targetIndex, record, { fn: isFn })
+      const updated = withRecord(targetMatrix, targetIndex, record)
+      return isFn ? { fnMatrix: updated } : { matrix: updated }
     })
   }
 
@@ -486,7 +609,7 @@ class Controller {
     await this.run('正在切换配置…', async (client) => {
       await client.restore(entry.snapshot)
       return {}
-    }, { refreshMatrix: true, fullInfo: true })
+    }, { refreshMatrix: true, refreshFn: this.layer === 'fn' || this.fnMatrix !== null, fullInfo: true })
   }
 
   exportProfile(): void {
@@ -521,7 +644,7 @@ class Controller {
     await this.run('正在恢复默认设置，请等待键盘重启…', async (client) => {
       await client.factoryReset()
       return {}
-    }, { refreshMatrix: true, fullInfo: true })
+    }, { refreshMatrix: true, refreshFn: this.layer === 'fn' || this.fnMatrix !== null, fullInfo: true })
   }
 
   // ---- 只读自检（?selftest=1 连接后自动运行）----

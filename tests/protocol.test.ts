@@ -243,6 +243,23 @@ describe('改键', () => {
     await client.setKey(78, [0, 0, 68, 0])
     expect(delays).toContain(500)
   })
+
+  it('Fn 改键只写 Fn 表并保留普通键', async () => {
+    const keyboard = new MockKeyboard()
+    const originalBase = keyboard.matrix.slice()
+    await makeClient(keyboard).client.setKey(82, [10, 9, 0, 0], { fn: true })
+    expect(keyboard.fn.slice(82 * 4, 82 * 4 + 4)).toEqual([10, 9, 0, 0])
+    expect(keyboard.matrix).toEqual(originalBase)
+    expect(keyboard.mutations.filter((f) => f[0] === 0x15).map((f) => f[2])).toEqual([82])
+    expect(keyboard.mutations.some((f) => f[0] === 0x13)).toBe(false)
+  })
+
+  it('识别原厂 Siri 动作而不放行其他未知 type-18', async () => {
+    const keyboard = new MockKeyboard()
+    expect(recordLabel([18, 0, 227, 44], definition)).toBe('呼出 Siri')
+    await makeClient(keyboard).client.setKey(30, [18, 0, 227, 44], { fn: true })
+    await expect(makeClient(keyboard).client.setKey(30, [18, 0, 0, 1], { fn: true })).rejects.toThrow(ProtocolError)
+  })
 })
 
 describe('宏', () => {
@@ -257,6 +274,11 @@ describe('宏', () => {
     expect(decoded.events.map((e) => e.down)).toEqual(macro.events.map((e) => e.down))
     expect(() => macroEncoded({ repeatCount: 1, events: [{ usage: 227, down: true, delay: 0 }] }))
       .toThrow(ProtocolError)
+    expect(() => macroEncoded({ repeatCount: 1, events: [{ usage: 4, down: false, delay: 0 }] }))
+      .toThrow(ProtocolError)
+    expect(() => macroEncoded({ repeatCount: 1, events: [
+      { usage: 4, down: true, delay: 0 }, { usage: 4, down: true, delay: 0 }, { usage: 4, down: false, delay: 0 },
+    ] })).toThrow(ProtocolError)
   })
 
   it('宏紧凑延时解码', () => {
@@ -292,6 +314,20 @@ describe('宏', () => {
     expect(result.macroSlot).toBe(0)
     expect(keyboard.matrix.slice(312, 316)).toEqual([9, 2, 0, 0])
     expect(keyboard.macros[0]).toEqual(macroEncoded(exampleMacro()))
+  })
+
+  it('Fn 宏只绑定 Fn 层，并避开普通层已使用的宏槽', async () => {
+    const keyboard = new MockKeyboard()
+    keyboard.matrix.splice(78 * 4, 4, 9, 0, 0, 0)
+    keyboard.macros[0] = macroEncoded(exampleMacro())
+    const base = keyboard.matrix.slice(), previousMacro = keyboard.macros[0]!.slice()
+    const result = await makeClient(keyboard).client.assignMacro(78, exampleMacro(), 2, null, { fn: true })
+    expect(result.macroSlot).toBe(1)
+    expect(keyboard.fn.slice(78 * 4, 78 * 4 + 4)).toEqual([9, 2, 1, 0])
+    expect(keyboard.matrix).toEqual(base)
+    expect(keyboard.macros[0]).toEqual(previousMacro)
+    expect(keyboard.mutations.filter((f) => f[0] === 0x15)).toHaveLength(1)
+    expect(keyboard.mutations.some((f) => f[0] === 0x13)).toBe(false)
   })
 })
 

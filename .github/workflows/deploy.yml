@@ -25,12 +25,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install & Build
-        working-directory: web
         run: |
           npm ci
+          npm run check
           npm test
           npm run build
         env:
@@ -39,7 +39,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: web/dist
+          path: dist
 
   deploy:
     needs: build
