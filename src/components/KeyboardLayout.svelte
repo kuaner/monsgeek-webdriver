@@ -22,7 +22,7 @@
           selectedIndex={controller.selectedKeyIndex} {hoveredIndex} />
         {#each definition.keys as key (key.index)}
           {@const knob = isKnobKey(key)}
-          {@const bounds = knob ? knobBounds(key) : keyBounds(key)}
+          {@const bounds = knob ? knobBounds(key) : keyBounds(key, controller.macMode, definition.keys)}
           {@const keyMatrix = knob ? controller.matrix : controller.activeMatrix}
           {@const record = keyMatrix
             ? keyMatrix.slice(key.index * 4, key.index * 4 + 4)

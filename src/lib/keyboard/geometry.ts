@@ -5,9 +5,11 @@ export const KEYBOARD_WIDTH = 638
 export const KEYBOARD_HEIGHT = 288
 
 /** SVG 键帽与点击层共用同一套坐标，避免绘制和交互区域错位。 */
-export function keyBounds(key: PhysicalKey) {
+export function keyBounds(key: PhysicalKey, mac = false, keys: readonly PhysicalKey[] = []) {
   const extra = isKnobKey(key) ? 1 : 10
-  return { x: key.x - 116 - extra / 2, y: -key.y - 2, width: key.width + extra, height: key.height + 4 }
+  const counterpart = key.name === 'Win' ? 'Alt' : key.name === 'Alt' ? 'Win' : ''
+  const other = mac && counterpart ? keys.find((candidate) => candidate.name === counterpart) ?? key : key
+  return { x: other.x - 116 - extra / 2, y: -other.y - 2, width: key.width + extra, height: key.height + 4 }
 }
 
 export const KNOB_CENTER = { x: 601, y: 41, radius: 18.3 }

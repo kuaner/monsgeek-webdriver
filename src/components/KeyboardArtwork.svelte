@@ -64,7 +64,7 @@
 
   {#each definition.keys as key (key.index)}
     {#if !isKnobKey(key)}
-      {@const bounds = keyBounds(key)}
+      {@const bounds = keyBounds(key, mac, definition.keys)}
       {@const { x, y, width, height } = bounds}
       {@const record = matrix?.slice(key.index * 4, key.index * 4 + 4) ?? null}
       {@const remapped = record !== null && !recordsEqual(record, key.record)}

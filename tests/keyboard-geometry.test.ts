@@ -21,6 +21,17 @@ describe('键盘绘制与点击区域', () => {
     }
   })
 
+  it('Mac 模式只交换左侧 Option/Command 的位置，右侧保持原厂顺序', () => {
+    const win = definition.keys.find((key) => key.name === 'Win')!
+    const alt = definition.keys.find((key) => key.name === 'Alt')!
+    const rightAlt = definition.keys.find((key) => key.name === 'r_Alt')!
+    const rightCtrl = definition.keys.find((key) => key.name === 'r_Ctrl')!
+    expect(keyBounds(win, true, definition.keys).x).toBe(keyBounds(alt, false).x)
+    expect(keyBounds(alt, true, definition.keys).x).toBe(keyBounds(win, false).x)
+    expect(keyBounds(rightAlt, true, definition.keys).x).toBe(keyBounds(rightAlt, false).x)
+    expect(keyBounds(rightCtrl, true, definition.keys).x).toBe(keyBounds(rightCtrl, false).x)
+  })
+
   it('旋钮的三个动作拥有各自独立的点击区和扇形反馈', () => {
     const left = definition.keys.find((key) => key.index === 6)!
     const press = definition.keys.find((key) => key.index === 94)!
