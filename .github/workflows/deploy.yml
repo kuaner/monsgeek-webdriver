@@ -27,6 +27,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Test firmware updater
+        run: python3 -m unittest discover -s firmware/m1w-983 -p 'test_*.py' -v
+
       - name: Install & Build
         run: |
           npm ci

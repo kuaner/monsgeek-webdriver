@@ -1,0 +1,21 @@
+{
+  "code": 0,
+  "err_message": null,
+  "data": {
+    "id": 364,
+    "dev_id": 983,
+    "company": "akko",
+    "version_str": "v108",
+    "lowest_app_version_str": "2.0.5",
+    "description": "修改拨动开关拨到开机档切换模式成有线模式,电脑关机后键盘无法唤醒",
+    "file_path": "fw_upgrade_file/983_v108",
+    "create_at": {
+      "secs_since_epoch": 1699438223,
+      "nanos_since_epoch": 2771000
+    },
+    "update_at": {
+      "secs_since_epoch": 1699438223,
+      "nanos_since_epoch": 2771000
+    }
+  }
+}
