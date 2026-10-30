@@ -127,7 +127,7 @@ class Controller {
   get connectionDescription(): string {
     if (this.connected && this.info) {
       const readOnly = infoSupportsConfiguration(this.info) ? '' : ' · 只读'
-      return `${this.connectionMode === 'bluetooth' ? '蓝牙' : 'USB'} 已连接 · 固件 ${infoFirmware(this.info)} · 配置 ${infoProfile(this.info)}${readOnly}`
+      return `${this.connectionMode === 'bluetooth' ? '蓝牙' : 'USB'} 已连接 · 固件 ${infoFirmware(this.info)}${readOnly}`
     }
     return '键盘未连接'
   }
@@ -195,6 +195,11 @@ class Controller {
 
   get lightsEnabledNow(): boolean {
     return this.info !== null && infoLightsEnabled(this.info)
+  }
+
+  get macMode(): boolean {
+    // 修饰键图例跟随实体 Mac/Windows 拨动开关，而不是电脑系统。
+    return ((infoKeyboardOptions(this.info!)?.[2] ?? 0) & 2) !== 0
   }
 
   // ---- 启动与轮询 ----
