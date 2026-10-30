@@ -20,8 +20,9 @@
       return controller.busy ? controller.status : '正在连接键盘…'
     }
     if (controller.connected && controller.info) {
-      return `${controller.connectionMode === 'bluetooth' ? '蓝牙' : 'USB'} · 固件 ${infoFirmware(controller.info)}` +
-        (controller.canConfigure ? '' : ' · 只读')
+      const mode = controller.connectionMode === 'bluetooth' ? '蓝牙' : controller.connectionMode === 'dongle' ? '2.4G' : 'USB'
+      const battery = controller.battery === null ? '' : ` · 电量 ${controller.battery}%`
+      return `${mode} · 固件 ${infoFirmware(controller.info)}${battery}` + (controller.canConfigure ? '' : ' · 只读')
     }
     return controller.connectionDescription
   })
@@ -74,7 +75,7 @@
     <i class="dot" style="background:var(--accent)"></i>已选
     {#if controller.layer === 'base'}<i class="dot amber" style="background:var(--amber)"></i>已改键{/if}
   {:else}
-    需要 Chrome / Edge 浏览器；2.4G 模式暂不支持。
+    需要 Chrome / Edge 浏览器；2.4G 模式需插入接收器并唤醒键盘。
   {/if}
 </div>
 

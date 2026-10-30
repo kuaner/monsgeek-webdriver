@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Connection, M1W_BLUETOOTH_FILTERS, M1W_FILTERS } from '../src/lib/protocol/hid'
+import { Connection, M1W_BLUETOOTH_FILTERS, M1W_DONGLE_FILTERS, M1W_FILTERS } from '../src/lib/protocol/hid'
 
 class FakeDevice extends EventTarget {
   opened = true
@@ -83,6 +83,20 @@ describe('连接方式', () => {
     await connection.requestAndConnect('usb')
     expect(usb.forget).toHaveBeenCalledOnce()
     expect(hid.requestDevice).toHaveBeenCalledWith({ filters: M1W_FILTERS })
+    await connection.disconnect()
+  })
+
+  it('2.4G 只连接接收器厂商集合并使用接收器专用过滤器', async () => {
+    const dongle = new FakeDevice(0x3151, 0x4011, usbCollection)
+    const usb = new FakeDevice(0x3151, 0x4015, usbCollection)
+    const hid = browser([usb, dongle], [dongle])
+    const connection = new Connection()
+    expect(await connection.autoConnect('dongle')).toBe(true)
+    expect(connection.device).toBe(dongle.asDevice())
+    await connection.disconnect()
+    expect(await connection.requestAndConnect('dongle')).toBe(true)
+    expect(hid.requestDevice).toHaveBeenCalledWith({ filters: M1W_DONGLE_FILTERS })
+    expect(connection.mode).toBe('dongle')
     await connection.disconnect()
   })
 })

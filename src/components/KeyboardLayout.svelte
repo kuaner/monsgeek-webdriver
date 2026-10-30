@@ -82,7 +82,8 @@
           <span>蓝牙</span>
           <small>无线连接</small>
         </button>
-        <button class="connection-card connection-card-disabled" disabled title="2.4G 模式暂不支持">
+        <button class="connection-card" disabled={controller.busy || controller.connectionChecking}
+          onclick={() => void controller.connectWithMode('dongle')}>
           <svg class="connection-art" viewBox="0 0 200 100" fill="none" aria-hidden="true">
             <path d="M79 70l-5 14h52l-5-14" stroke="#555760" stroke-width="2"/>
             <rect x="69" y="21" width="62" height="51" rx="7" fill="#25262b" stroke="#555760"/>
@@ -91,7 +92,7 @@
             <path d="M53 34a25 25 0 0 0 0 30m94-30a25 25 0 0 1 0 30M60 41a14 14 0 0 0 0 16m80-16a14 14 0 0 1 0 16" stroke="#50525b" stroke-width="2" stroke-linecap="round"/>
           </svg>
           <span>2.4G</span>
-          <small>暂不支持</small>
+          <small>接收器连接</small>
         </button>
       </div>
     </div>

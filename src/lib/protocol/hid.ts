@@ -1,15 +1,19 @@
-// WebHID 连接管理：有线使用 Feature Report，蓝牙使用厂商 Input/Output Report。
+// WebHID 连接管理：有线/2.4G 使用 Feature Report，蓝牙使用厂商 Input/Output Report。
 
 import type { Frame, ReportTransport } from './types'
 import { BluetoothHIDTransport, hasBluetoothCollection } from './bluetooth'
+import { DongleHIDTransport } from './dongle'
 
-export type ConnectionMode = 'usb' | 'bluetooth'
+export type ConnectionMode = 'usb' | 'bluetooth' | 'dongle'
 
 export const M1W_FILTERS: HIDDeviceFilter[] = [
   { vendorId: 0x3151, usagePage: 0xffff, usage: 0x0002 },
 ]
 export const M1W_BLUETOOTH_FILTERS: HIDDeviceFilter[] = [
   { vendorId: 0x3151, productId: 0x4013 },
+]
+export const M1W_DONGLE_FILTERS: HIDDeviceFilter[] = [
+  { vendorId: 0x3151, productId: 0x4011, usagePage: 0xffff, usage: 0x0002 },
 ]
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -34,7 +38,7 @@ function isM1W(device: HIDDevice, mode: ConnectionMode): boolean {
   if (device.vendorId !== 0x3151) return false
   return mode === 'bluetooth'
     ? device.productId === 0x4013 && hasBluetoothCollection(device)
-    : hasVendorFeatureCollection(device)
+    : (mode === 'usb' ? device.productId === 0x4015 : device.productId === 0x4011) && hasVendorFeatureCollection(device)
 }
 
 export class WebHIDTransport implements ReportTransport {
@@ -94,9 +98,10 @@ export class Connection {
   device: HIDDevice | null = null
   connected = false
   mode: ConnectionMode | null = null
-  private activeTransport: WebHIDTransport | BluetoothHIDTransport | null = null
+  battery: number | null = null
+  private activeTransport: ReportTransport | BluetoothHIDTransport | null = null
 
-  constructor(private readonly onChange?: ConnectionListener) {
+  constructor(private readonly onChange?: ConnectionListener, private readonly onBattery?: (battery: number | null) => void) {
     navigator.hid?.addEventListener('disconnect', (event) => {
       if (this.device === event.device) {
         if (this.activeTransport instanceof BluetoothHIDTransport) this.activeTransport.dispose()
@@ -104,6 +109,8 @@ export class Connection {
         this.device = null
         this.connected = false
         this.mode = null
+        this.battery = null
+        this.onBattery?.(null)
         this.onChange?.()
       }
     })
@@ -136,16 +143,19 @@ export class Connection {
       try {
         if (this.device.opened) await this.device.close()
       } catch { /* 忽略 */ }
-      if (this.mode === mode && mode === 'usb') {
+      if (this.mode === mode && (mode === 'usb' || mode === 'dongle')) {
         try { await this.device.forget() } catch { /* 未授权或已释放 */ }
       }
       this.device = null
       this.connected = false
       this.mode = null
+      this.battery = null
+      this.onBattery?.(null)
     }
     let devices: HIDDevice[] = []
     try {
-      devices = await navigator.hid.requestDevice({ filters: mode === 'bluetooth' ? M1W_BLUETOOTH_FILTERS : M1W_FILTERS })
+      const filters = mode === 'bluetooth' ? M1W_BLUETOOTH_FILTERS : mode === 'dongle' ? M1W_DONGLE_FILTERS : M1W_FILTERS
+      devices = await navigator.hid.requestDevice({ filters })
     } catch (error) {
       throw new Error(`未选择设备：${error instanceof Error ? error.message : String(error)}`)
     }
@@ -153,7 +163,9 @@ export class Connection {
     const found = devices.find((device) => isM1W(device, mode))
     if (!found) throw new Error(mode === 'bluetooth'
       ? '所选设备没有可用的 M1W 蓝牙配置通道。'
-      : '所选设备不是 M1W 的厂商功能集合，请选择 MonsGeek Keyboard。')
+      : mode === 'dongle'
+        ? '请选择 MonsGeek 2.4G Wireless Keyboard 接收器。'
+        : '所选设备不是 M1W 的厂商功能集合，请选择 MonsGeek Keyboard。')
     return this.adopt(found, mode)
   }
 
@@ -162,7 +174,8 @@ export class Connection {
     this.device = device
     this.connected = true
     this.mode = mode
-    this.activeTransport = mode === 'bluetooth' ? new BluetoothHIDTransport(device) : new WebHIDTransport(device)
+    this.battery = null
+    this.activeTransport = this.makeTransport(device, mode)
     this.onChange?.()
     return true
   }
@@ -174,6 +187,8 @@ export class Connection {
     this.device = null
     this.connected = false
     this.mode = null
+    this.battery = null
+    this.onBattery?.(null)
     if (previous?.opened) await previous.close()
     this.onChange?.()
   }
@@ -191,7 +206,7 @@ export class Connection {
     try {
       await openDevice(this.device)
       this.connected = true
-      this.activeTransport = this.mode === 'bluetooth' ? new BluetoothHIDTransport(this.device) : new WebHIDTransport(this.device)
+      this.activeTransport = this.makeTransport(this.device, this.mode)
       return true
     } catch {
       this.connected = false
@@ -203,5 +218,16 @@ export class Connection {
   transport(): ReportTransport {
     if (!this.device || !this.connected || !this.activeTransport) throw new Error('键盘未连接。')
     return this.activeTransport
+  }
+
+  private makeTransport(device: HIDDevice, mode: ConnectionMode): ReportTransport {
+    if (mode === 'bluetooth') return new BluetoothHIDTransport(device)
+    const usb = new WebHIDTransport(device)
+    return mode === 'dongle'
+      ? new DongleHIDTransport(usb, (battery) => {
+        this.battery = battery
+        this.onBattery?.(battery)
+      })
+      : usb
   }
 }

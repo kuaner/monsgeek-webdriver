@@ -64,7 +64,10 @@ function loadProfiles(): StoredProfile[] {
 }
 
 function loadConnectionMode(): ConnectionMode {
-  try { return localStorage.getItem(LS_CONNECTION_KEY) === 'bluetooth' ? 'bluetooth' : 'usb' }
+  try {
+    const mode = localStorage.getItem(LS_CONNECTION_KEY)
+    return mode === 'bluetooth' || mode === 'dongle' ? mode : 'usb'
+  }
   catch { return 'usb' }
 }
 
@@ -75,6 +78,7 @@ class Controller {
   errorMessage: string | null = $state(null)
   connected = $state(false)
   connectionMode: ConnectionMode = $state(loadConnectionMode())
+  battery: number | null = $state(null)
   info: DeviceInfo | null = $state(null)
   matrix: number[] | null = $state(null)
   fnMatrix: number[] | null = $state(null)
@@ -127,7 +131,9 @@ class Controller {
   get connectionDescription(): string {
     if (this.connected && this.info) {
       const readOnly = infoSupportsConfiguration(this.info) ? '' : ' · 只读'
-      return `${this.connectionMode === 'bluetooth' ? '蓝牙' : 'USB'} 已连接 · 固件 ${infoFirmware(this.info)}${readOnly}`
+      const mode = this.connectionMode === 'bluetooth' ? '蓝牙' : this.connectionMode === 'dongle' ? '2.4G' : 'USB'
+      const battery = this.battery === null ? '' : ` · 电量 ${this.battery}%`
+      return `${mode} 已连接 · 固件 ${infoFirmware(this.info)}${battery}${readOnly}`
     }
     return '键盘未连接'
   }
@@ -205,7 +211,7 @@ class Controller {
   // ---- 启动与轮询 ----
 
   start(): () => void {
-    this.connection = new Connection(() => this.onConnectionChange())
+    this.connection = new Connection(() => this.onConnectionChange(), (battery) => { this.battery = battery })
     if (!this.connection.supported) {
       this.status = '此浏览器不支持 WebHID，请使用 Chrome / Edge。'
       return () => {}
@@ -231,6 +237,7 @@ class Controller {
       this.connected = false
       this.matrix = null
       this.fnMatrix = null
+      this.battery = null
       this.macroRequest++
       this.status = '键盘连接已断开，正在等待重新连接…'
     }
@@ -269,6 +276,7 @@ class Controller {
     } finally {
       this.connected = false
       this.info = null
+      this.battery = null
       this.matrix = null
       this.fnMatrix = null
       this.remapOpen = false
@@ -448,6 +456,7 @@ class Controller {
 
   closeRemap(): void {
     this.remapOpen = false
+    this.selectedKeyIndex = -1
   }
 
   private syncMapping(): void {
