@@ -50,25 +50,24 @@
 {:else}
   <div class="stage-empty">
     <div class="empty">
-      <span class="glyph">
-        <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2.5" y="6" width="19" height="12.5" rx="2.5" />
-          <path d="M6 9.5h.01M9.5 9.5h.01M13 9.5h.01M16.5 9.5h.01M6 12.75h.01M9.5 12.75h.01M13 12.75h.01M16.5 12.75h.01M7.5 16h9" />
-        </svg>
-      </span>
-      <h2>连接你的 M1W</h2>
-      <p>通过 USB 数据线连接键盘后授权访问</p>
-      <div class="steps">
-        <span class="step"><b>1</b> 插入 USB 数据线</span>
-        <span class="arrow">→</span>
-        <span class="step"><b>2</b> 键盘切到有线模式</span>
-        <span class="arrow">→</span>
-        <span class="step"><b>3</b> 点击下方连接</span>
+      <h2>选择键盘连接方式</h2>
+      <div class="connection-choices" role="group" aria-label="选择键盘连接方式">
+        <button class="connection-card" disabled={controller.busy || controller.connectionChecking}
+          onclick={() => void controller.connectWithMode('usb')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21V3m0 0L9 6m3-3 3 3M12 11H7V8m5 8h5v-3" />
+            <circle cx="7" cy="7" r="1" /><rect x="16" y="11" width="2" height="2" /><circle cx="12" cy="21" r="1" />
+          </svg>
+          <span>有线 USB</span>
+        </button>
+        <button class="connection-card" disabled={controller.busy || controller.connectionChecking}
+          onclick={() => void controller.connectWithMode('bluetooth')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 7l10 10-5 4V3l5 4L7 17" />
+          </svg>
+          <span>蓝牙</span>
+        </button>
       </div>
-      <button class="primary" onclick={() => void controller.connectByPicker()}>
-        连接键盘
-      </button>
-      <p class="note caption">需要 Chrome / Edge 浏览器；蓝牙或 2.4G 模式下无法通信。</p>
     </div>
   </div>
 {/if}

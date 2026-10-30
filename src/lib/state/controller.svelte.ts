@@ -13,7 +13,7 @@ import {
 import type {
   DeviceDefinition, DeviceInfo, KeyRecord, KeyboardMacro, StoredProfile,
 } from '../protocol/types'
-import { Connection } from '../protocol/hid'
+import { Connection, type ConnectionMode } from '../protocol/hid'
 
 export const MAPPING_MODES = [
   { id: 'key', label: '按键' },
@@ -33,6 +33,7 @@ export const EFFECTS: Array<[number, string]> = [
 ]
 
 const LS_KEY = 'm1w-web-profiles'
+const LS_CONNECTION_KEY = 'm1w-connection-mode'
 const SELFTEST = new URLSearchParams(location.search).has('selftest')
 
 export const definition: DeviceDefinition = definitionJson as DeviceDefinition
@@ -62,11 +63,18 @@ function loadProfiles(): StoredProfile[] {
   }
 }
 
+function loadConnectionMode(): ConnectionMode {
+  try { return localStorage.getItem(LS_CONNECTION_KEY) === 'bluetooth' ? 'bluetooth' : 'usb' }
+  catch { return 'usb' }
+}
+
 class Controller {
   busy = $state(false)
+  connectionChecking = $state(false)
   status = $state('连接 M1W 数据线并切到有线模式')
   errorMessage: string | null = $state(null)
   connected = $state(false)
+  connectionMode: ConnectionMode = $state(loadConnectionMode())
   info: DeviceInfo | null = $state(null)
   matrix: number[] | null = $state(null)
   fnMatrix: number[] | null = $state(null)
@@ -107,6 +115,7 @@ class Controller {
   private timer: ReturnType<typeof setInterval> | null = null
   private selftestRan = false
   private macroRequest = 0
+  private autoReconnect = true
 
   // ---- 派生状态 ----
 
@@ -118,9 +127,9 @@ class Controller {
   get connectionDescription(): string {
     if (this.connected && this.info) {
       const readOnly = infoSupportsConfiguration(this.info) ? '' : ' · 只读'
-      return `USB 已连接 · 固件 ${infoFirmware(this.info)} · 配置 ${infoProfile(this.info)}${readOnly}`
+      return `${this.connectionMode === 'bluetooth' ? '蓝牙' : 'USB'} 已连接 · 固件 ${infoFirmware(this.info)} · 配置 ${infoProfile(this.info)}${readOnly}`
     }
-    return '连接 M1W 数据线并切到有线模式'
+    return '键盘未连接'
   }
 
   get selectedKey() {
@@ -204,7 +213,10 @@ class Controller {
   }
 
   private async autoConnect(): Promise<void> {
-    const ok = await this.connection!.autoConnect().catch(() => false)
+    this.busy = true
+    this.status = '正在连接键盘…'
+    const ok = await this.connection!.autoConnect(this.connectionMode).catch(() => false)
+    this.busy = false
     if (ok) await this.refresh()
     if (SELFTEST && ok) await this.selfTest()
   }
@@ -219,15 +231,46 @@ class Controller {
     }
   }
 
-  async connectByPicker(): Promise<void> {
+  async connectWithMode(mode: ConnectionMode): Promise<void> {
+    if (this.busy || this.connectionChecking || this.connected) return
+    this.connectionMode = mode
+    this.autoReconnect = false
+    try { localStorage.setItem(LS_CONNECTION_KEY, mode) } catch { /* 浏览器不允许保存时仍可连接 */ }
+    let ok = false
+    this.busy = true
     try {
       this.errorMessage = null
-      await this.connection!.requestAndConnect()
-      await this.refresh()
-      if (SELFTEST && !this.selftestRan) await this.selfTest()
+      this.status = '正在连接键盘…'
+      ok = await this.connection!.requestAndConnect(mode)
+      this.autoReconnect = ok
     } catch (error) {
       this.errorMessage = error instanceof Error ? error.message : String(error)
       this.status = this.errorMessage
+    } finally {
+      this.busy = false
+    }
+    if (ok) await this.refresh()
+    if (ok && SELFTEST && !this.selftestRan) await this.selfTest()
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.busy) return
+    this.autoReconnect = false
+    this.busy = true
+    try {
+      await usbQueue(() => this.connection!.disconnect())
+    } catch (error) {
+      this.errorMessage = error instanceof Error ? error.message : String(error)
+    } finally {
+      this.connected = false
+      this.info = null
+      this.matrix = null
+      this.fnMatrix = null
+      this.remapOpen = false
+      this.macroSheetOpen = false
+      this.macroRequest++
+      this.status = '选择连接方式'
+      this.busy = false
     }
   }
 
@@ -296,9 +339,12 @@ class Controller {
   private async poll(): Promise<void> {
     if (this.busy || this.polling) return
     this.polling = true
+    const checkingDisconnected = !this.connected
+    if (checkingDisconnected) this.connectionChecking = true
     try {
       if (!this.connection!.connected) {
-        const ok = await this.connection!.autoConnect().catch(() => false)
+        if (!this.autoReconnect) return
+        const ok = await this.connection!.autoConnect(this.connectionMode).catch(() => false)
         if (!ok) {
           if (this.connected) {
             this.connected = false
@@ -341,7 +387,10 @@ class Controller {
       if (matrix || fnMatrix) this.syncMapping()
       if (!infoSupportsConfiguration(info) || infoProfile(info) !== 0) { this.matrix = null; this.fnMatrix = null }
       this.syncLight()
-      if (!prevConnected) this.status = '已连接并同步键盘'
+      if (!prevConnected) {
+        this.errorMessage = null
+        this.status = '已连接并同步键盘'
+      }
       if (SELFTEST && !this.selftestRan) await this.selfTest()
     } catch {
       if (!(await this.connection!.heal())) {
@@ -352,6 +401,7 @@ class Controller {
         this.status = '键盘通信中断。请点击右上角「连接键盘」重新授权，即可恢复。'
       }
     } finally {
+      if (checkingDisconnected) this.connectionChecking = false
       this.polling = false
     }
   }

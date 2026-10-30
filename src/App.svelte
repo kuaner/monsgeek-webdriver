@@ -23,8 +23,11 @@
 
   const statusText = $derived.by(() => {
     if (alertStatus) return controller.errorMessage ?? controller.status
+    if (!controller.connected && (controller.busy || controller.connectionChecking)) {
+      return controller.busy ? controller.status : '正在连接键盘…'
+    }
     if (controller.connected && controller.info) {
-      return `固件 ${infoFirmware(controller.info)} · 配置 ${infoProfile(controller.info)}` +
+      return `${controller.connectionMode === 'bluetooth' ? '蓝牙' : 'USB'} · 固件 ${infoFirmware(controller.info)} · 配置 ${infoProfile(controller.info)}` +
         (controller.canConfigure ? '' : ' · 只读')
     }
     return controller.connectionDescription
@@ -42,13 +45,22 @@
   <span class="topbar-title">MonsGeek Web Driver</span>
   <span class="conn-dot" class:on={controller.connected} class:err={alertStatus}></span>
   <span class="topbar-status num" class:alert={alertStatus} title={controller.status}>
-    {statusText}{controller.busy ? ' · 处理中…' : ''}
+    {statusText}{controller.connected && (controller.busy || controller.connectionChecking) ? ' · 处理中…' : ''}
   </span>
+
+  {#if controller.connected}
+    <div class="layer-switch header-layer-switch" role="group" aria-label="选择编辑层">
+      <button class:active={controller.layer === 'base'} aria-pressed={controller.layer === 'base'}
+        disabled={controller.busy} onclick={() => void controller.selectLayer('base')}>单按</button>
+      <button class:active={controller.layer === 'fn'} aria-pressed={controller.layer === 'fn'}
+        disabled={controller.busy} onclick={() => void controller.selectLayer('fn')}>Fn 组合</button>
+    </div>
+  {/if}
 
   <span class="spacer"></span>
 
-  <div class="topbar-actions">
-    {#if controller.connected}
+  {#if controller.connected}
+    <div class="topbar-actions">
       <TopMenus />
       {#if controller.profiles.length > 0}
         <select
@@ -78,12 +90,9 @@
       />
       <button class="danger" disabled={!controller.canConfigure} onclick={() => void resetWithConfirm()}>恢复默认</button>
       <button disabled={controller.busy} onclick={() => void controller.refresh()}>刷新</button>
-    {:else}
-      <button class="primary" disabled={controller.busy} onclick={() => void controller.connectByPicker()}>
-        连接键盘
-      </button>
-    {/if}
-  </div>
+      <button disabled={controller.busy} onclick={() => void controller.disconnect()}>切换连接</button>
+    </div>
+  {/if}
 </header>
 
 {#if controller.selftestVisible}
@@ -91,17 +100,6 @@
 {/if}
 
 <!-- 键盘：唯一视觉主体（无边框） -->
-{#if controller.connected}
-  <div class="layer-bar">
-    <div class="layer-switch" role="group" aria-label="选择编辑层">
-      <button class:active={controller.layer === 'base'} aria-pressed={controller.layer === 'base'}
-        disabled={controller.busy} onclick={() => void controller.selectLayer('base')}>单按</button>
-      <button class:active={controller.layer === 'fn'} aria-pressed={controller.layer === 'fn'}
-        disabled={controller.busy} onclick={() => void controller.selectLayer('fn')}>Fn 组合</button>
-    </div>
-    <span class="caption">{controller.layer === 'fn' ? '设置 Fn + 按键，单按功能保留' : '设置单独按下时的作用'}</span>
-  </div>
-{/if}
 <KeyboardLayout />
 
 <div class="kb-under caption">
@@ -110,7 +108,7 @@
     <i class="dot" style="background:var(--accent)"></i>已选
     {#if controller.layer === 'base'}<i class="dot amber" style="background:var(--amber)"></i>已改键{/if}
   {:else}
-    配置保存在本浏览器，可导出 JSON 与原生客户端互通；日常操作不会自动备份。
+    需要 Chrome / Edge 浏览器；2.4G 模式暂不支持。
   {/if}
 </div>
 
