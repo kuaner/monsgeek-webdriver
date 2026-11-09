@@ -2,12 +2,13 @@
 // 移植自原生 Controller.swift 与初版 webhid/js/app.js 的控制逻辑，
 // 遵循用户既定偏好：日常不自动备份；仅手动保存配置；恢复默认必须显式确认。
 
-import definitionJson from '../assets/m1w.json'
+import { definitionForInfo, m1wDefinition, modelName } from '../keyboard/models'
+import { physicalKeyDisplayName } from '../keyboard/legends'
 import { M1WClient } from '../protocol/client'
 import {
   allActions, chord, isKnobKey, keyDisplayName, macroDecoded, macroEncoded, validateKeyRecord,
   infoDeviceID, infoFirmware, infoFirmwareRevision, infoLightsEnabled, infoLight,
-  infoProfile, infoSupportsConfiguration, infoKeyboardOptions, lightUISpeed, mergeInfo, PLAYBACKS,
+  infoProfile, infoSupportsConfiguration, infoSupportsFnConfiguration, infoKeyboardOptions, lightUISpeed, mergeInfo, PLAYBACKS,
   recordsEqual, recordLabel, snapshotValidatedMatrix,
 } from '../protocol/core'
 import type {
@@ -36,8 +37,11 @@ const LS_KEY = 'm1w-web-profiles'
 const LS_CONNECTION_KEY = 'm1w-connection-mode'
 const SELFTEST = new URLSearchParams(location.search).has('selftest')
 
-export const definition: DeviceDefinition = definitionJson as DeviceDefinition
-export const actions = allActions(definition)
+export const definition: DeviceDefinition = m1wDefinition
+
+function isBluetoothLinkError(message: string): boolean {
+  return /蓝牙.*(超时|已中断|已断开|发送失败)/.test(message)
+}
 
 // 全局 USB 串行队列（等价 native 的串行 DispatchQueue），外层套 Web Locks
 // 跨标签页互斥：run / poll / 宏读取 / 自检全部排队执行，
@@ -123,6 +127,26 @@ class Controller {
 
   // ---- 派生状态 ----
 
+  get definition(): DeviceDefinition {
+    return definitionForInfo(this.info) ?? definition
+  }
+
+  get modelName(): string | null {
+    return modelName(this.info)
+  }
+
+  get actions() {
+    return allActions(this.definition)
+  }
+
+  get canConfigureFn(): boolean {
+    return !!this.info && infoSupportsFnConfiguration(this.info)
+  }
+
+  physicalKeyName(key: DeviceDefinition['keys'][number]): string {
+    return physicalKeyDisplayName(key, this.definition)
+  }
+
   get canConfigure(): boolean {
     return this.connected && this.info !== null &&
       infoSupportsConfiguration(this.info) && infoProfile(this.info) === 0
@@ -139,7 +163,7 @@ class Controller {
   }
 
   get selectedKey() {
-    return definition.keys.find((k) => k.index === this.selectedKeyIndex) ?? null
+    return this.selectedKeyIndex >= 0 ? this.definition.keys.find((k) => k.index === this.selectedKeyIndex) ?? null : null
   }
 
   get activeMatrix(): number[] | null {
@@ -155,9 +179,9 @@ class Controller {
 
   get canEditKey(): boolean {
     if (!this.canConfigure || this.busy || !this.selectedKey || !this.currentRecord || this.selectedKey.name === 'FN') return false
-    // Fn writes have been verified on 1.08; other revisions remain readable.
+    // Fn writes are limited to device/firmware combinations verified on hardware.
     if (this.layer === 'fn') {
-      if (infoFirmwareRevision(this.info!) !== 0x0108) return false
+      if (!this.canConfigureFn) return false
       try { validateKeyRecord(this.currentRecord) } catch { return false }
     }
     return true
@@ -165,14 +189,14 @@ class Controller {
 
   get baseMapping(): string {
     const i = this.selectedKeyIndex * 4
-    return this.matrix && i >= 0 ? recordLabel(this.matrix.slice(i, i + 4), definition) : '未读取'
+    return this.matrix && i >= 0 ? recordLabel(this.matrix.slice(i, i + 4), this.definition) : '未读取'
   }
 
   get fnMapping(): string {
     const i = this.selectedKeyIndex * 4
     if (!this.fnMatrix || i < 0) return '切换到 Fn 组合后读取'
     const record = this.fnMatrix.slice(i, i + 4)
-    return record.every((byte) => byte === 0) ? '未设置' : recordLabel(record, definition)
+    return record.every((byte) => byte === 0) ? '未设置' : recordLabel(record, this.definition)
   }
 
   get currentRecord(): KeyRecord | null {
@@ -184,12 +208,12 @@ class Controller {
   get currentMapping(): string {
     const record = this.currentRecord
     if (this.layer === 'fn' && record?.every((byte) => byte === 0)) return '未设置'
-    return record ? recordLabel(record, definition) : '未读取'
+    return record ? recordLabel(record, this.definition) : '未读取'
   }
 
   get choices() {
     // 旋钮专用动作只在旋钮的功能列表中提供；仍可显示已有的映射。
-    return actions.filter((action) => {
+    return this.actions.filter((action) => {
       switch (this.mappingMode) {
         case 'key': return action.category === '按键' && action.record[0] === 0
         case 'function': return action.category !== '按键' &&
@@ -204,7 +228,8 @@ class Controller {
   }
 
   get macMode(): boolean {
-    // 修饰键图例跟随实体 Mac/Windows 拨动开关，而不是电脑系统。
+    // M7W 按官方实体布局显示，不从未确认的 86 状态推断拨杆位置。
+    if (this.modelName === 'M7W') return false
     return ((infoKeyboardOptions(this.info!)?.[2] ?? 0) & 2) !== 0
   }
 
@@ -229,7 +254,7 @@ class Controller {
     const ok = await this.connection!.autoConnect(this.connectionMode).catch(() => false)
     this.busy = false
     if (ok) await this.refresh()
-    if (SELFTEST && ok) await this.selfTest()
+    if (SELFTEST && ok && this.connected) await this.selfTest()
   }
 
   private onConnectionChange(): void {
@@ -237,6 +262,8 @@ class Controller {
       this.connected = false
       this.matrix = null
       this.fnMatrix = null
+      this.info = null
+      this.selectedKeyIndex = -1
       this.battery = null
       this.macroRequest++
       this.status = '键盘连接已断开，正在等待重新连接…'
@@ -262,7 +289,7 @@ class Controller {
       this.busy = false
     }
     if (ok) await this.refresh()
-    if (ok && SELFTEST && !this.selftestRan) await this.selfTest()
+    if (ok && this.connected && SELFTEST && !this.selftestRan) await this.selfTest()
   }
 
   async disconnect(): Promise<void> {
@@ -321,6 +348,13 @@ class Controller {
       return outcome
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
+      if (this.connection?.mode === 'bluetooth' && isBluetoothLinkError(text)) {
+        // A timed-out BLE transport refuses further requests. Release it and let
+        // the user wake the keyboard and explicitly reconnect, instead of polling
+        // the failed handle forever with the connection buttons disabled.
+        this.autoReconnect = false
+        await usbQueue(() => this.connection!.disconnect()).catch(() => {})
+      }
       this.status = /Failed to (write|read)/i.test(text)
         ? '键盘通信中断。请点击右上角「连接键盘」重新授权，即可恢复。'
         : text
@@ -405,8 +439,14 @@ class Controller {
         this.status = '已连接并同步键盘'
       }
       if (SELFTEST && !this.selftestRan) await this.selfTest()
-    } catch {
-      if (!(await this.connection!.heal())) {
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error)
+      if (this.connection!.mode === 'bluetooth' && isBluetoothLinkError(text)) {
+        this.autoReconnect = false
+        await this.connection!.disconnect().catch(() => {})
+        this.errorMessage = '蓝牙通信中断，请唤醒键盘后重新连接。'
+        this.status = this.errorMessage
+      } else if (!(await this.connection!.heal())) {
         this.connected = false
         this.matrix = null
         this.fnMatrix = null
@@ -441,8 +481,8 @@ class Controller {
   }
 
   selectKey(index: number, openEditor = false): void {
-    if (this.busy || this.macroSheetOpen) return
-    const key = definition.keys.find((item) => item.index === index)
+    if (this.busy || this.macroSheetOpen || index < 0) return
+    const key = this.definition.keys.find((item) => item.index === index)
     if (!key) return
     if (isKnobKey(key)) this.layer = 'base'
     this.selectedKeyIndex = index
@@ -483,14 +523,14 @@ class Controller {
       this.chordSecondary = record[3]! < 224 ? record[3]! : 0
       return
     }
-    let action = actions.find((a) => recordsEqual(a.record, record) && a.category !== '按键')
+    let action = this.actions.find((a) => recordsEqual(a.record, record) && a.category !== '按键')
     if (action && this.availableModes.some((mode) => mode.id === 'function')) {
       const actionId = action.id
       this.mappingMode = 'function'
       this.selectedAction = this.choices.some((choice) => choice.id === actionId) ? actionId : ''
       return
     }
-    action = actions.find((a) => recordsEqual(a.record, record))
+    action = this.actions.find((a) => recordsEqual(a.record, record))
     if (action && action.category === '按键') {
       this.selectedAction = action.id
       this.mappingMode = 'key'
@@ -737,7 +777,7 @@ class Controller {
           return value
         }
         const matrix = await phase('matrix 双读', () => client.readMatrix())
-        const nonDefault = definition.keys.filter((k) =>
+        const nonDefault = this.definition.keys.filter((k) => k.index >= 0 &&
           !recordsEqual(matrix.slice(k.index * 4, k.index * 4 + 4), k.record)).length
         log(`matrix: 与出厂默认不同的按键: ${nonDefault}`)
         const fn = await phase('fn 读取', () => client.readMatrix({ fn: true }))

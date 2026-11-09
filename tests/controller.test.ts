@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { M1WClient } from '../src/lib/protocol/client'
 import { macroEncoded } from '../src/lib/protocol/core'
 import { MockKeyboard, definition as mockDefinition } from '../src/lib/protocol/mock'
+import { m7wDefinition } from '../src/lib/keyboard/models'
 
 beforeEach(() => {
   vi.resetModules()
@@ -23,6 +24,40 @@ async function setup(keyboard: MockKeyboard) {
 }
 
 describe('层和操作目标', () => {
+  it('M7W 自动切换布局并将 Fn 层保留为只读', async () => {
+    const keyboard = new MockKeyboard()
+    keyboard.deviceID = 1215
+    keyboard.revision = 0x0100
+    keyboard.matrix = m7wDefinition.defaultMatrix.slice()
+    keyboard.fn = m7wDefinition.defaultFnMatrix.slice()
+    const { controller } = await import('../src/lib/state/controller.svelte')
+    controller.connection = { connected: true, transport: () => keyboard } as never
+    controller.connected = true
+    controller.info = await new M1WClient(keyboard, () => {}).liveInfo()
+    controller.matrix = keyboard.matrix.slice()
+    controller.fnMatrix = keyboard.fn.slice()
+    expect(controller.modelName).toBe('M7W')
+    expect(controller.definition.keys).toHaveLength(68)
+    expect(controller.selectedKey).toBeNull()
+    controller.selectKey(74)
+    expect(controller.canEditKey).toBe(true)
+    await controller.selectLayer('fn')
+    expect(controller.canEditKey).toBe(false)
+    expect(controller.canConfigureFn).toBe(false)
+  })
+
+  it('蓝牙查询超时后释放失败的连接并允许重新选择', async () => {
+    const { controller } = await import('../src/lib/state/controller.svelte')
+    const broken = { write: async () => { throw new Error('蓝牙查询 0x8f 响应超时，请重新连接。') }, read: async () => [] }
+    const disconnect = vi.fn(async () => {})
+    controller.connection = { connected: true, mode: 'bluetooth', transport: () => broken, disconnect } as never
+    await controller.refresh()
+    expect(disconnect).toHaveBeenCalledOnce()
+    expect(controller.connected).toBe(false)
+    expect(controller.busy).toBe(false)
+    expect(controller.status).toContain('超时')
+  })
+
   it('普通键只显示按键与组合，Fn 层可设置功能与宏', async () => {
     const keyboard = new MockKeyboard()
     const { controller } = await setup(keyboard)

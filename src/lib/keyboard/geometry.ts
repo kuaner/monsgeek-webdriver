@@ -1,8 +1,13 @@
 import { isKnobKey } from '../protocol/core'
-import type { PhysicalKey } from '../protocol/types'
+import type { DeviceDefinition, PhysicalKey } from '../protocol/types'
 
 export const KEYBOARD_WIDTH = 638
 export const KEYBOARD_HEIGHT = 288
+
+/** M7W 使用官方图的固定位置，不依赖尚未确认的拨杆状态。 */
+export function swapModifierPositions(definition: DeviceDefinition, mac: boolean): boolean {
+  return mac && definition.model !== 'yc500_m7wnosled_soc'
+}
 
 /** SVG 键帽与点击层共用同一套坐标，避免绘制和交互区域错位。 */
 export function keyBounds(key: PhysicalKey, mac = false, keys: readonly PhysicalKey[] = []) {

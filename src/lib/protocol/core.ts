@@ -187,9 +187,19 @@ export function infoDeviceID(info: DeviceInfo): number | null {
   return bytes ? (bytes[1]! | (bytes[2]! << 8)) : null
 }
 
-/** 仅设备 983 且固件 1.04/1.08 允许写入；其余只读展示。 */
+/** 仅允许经过设备型号及固件版本验证的组合写入。 */
 export function infoSupportsConfiguration(info: DeviceInfo): boolean {
-  return infoDeviceID(info) === 983 && [0x0104, 0x0108].includes(infoFirmwareRevision(info) ?? -1)
+  const device = infoDeviceID(info)
+  const firmware = infoFirmwareRevision(info) ?? -1
+  return (device === 983 && [0x0104, 0x0108].includes(firmware)) ||
+    (device === 1215 && firmware === 0x0100)
+}
+
+export function infoSupportsFnConfiguration(info: DeviceInfo): boolean {
+  const device = infoDeviceID(info)
+  const firmware = infoFirmwareRevision(info)
+  // M7W 1.00 did not reflect the tested command after the official 2 s delay.
+  return device === 983 && firmware === 0x0108
 }
 
 export function infoProfile(info: DeviceInfo): number {
@@ -232,7 +242,7 @@ export function makeSnapshot(
   const macros = options.macros ?? {}
   const snapshot: Snapshot = {
     schema: 2,
-    device: 'RongYuan M1W 3151:4015',
+    device: infoDeviceID(info) === 1215 ? 'RongYuan M7W 3151:4015' : 'RongYuan M1W 3151:4015',
     createdAt: new Date().toISOString(),
     info: { reports: { ...info.reports } },
     keymapHex: hexEncode(matrix),
@@ -249,7 +259,7 @@ export function makeSnapshot(
 
 export function snapshotValidatedMatrix(s: Snapshot): number[] {
   const matrix = hexDecode(s.keymapHex)
-  if (![1, 2].includes(s.schema) || s.device !== 'RongYuan M1W 3151:4015' ||
+  if (![1, 2].includes(s.schema) || !['RongYuan M1W 3151:4015', 'RongYuan M7W 3151:4015'].includes(s.device) ||
       infoProfile(s.info) !== 0 || matrix.length !== 512 || !matrix.some((b) => b !== 0) ||
       !infoLight(s.info)) {
     throw new ProtocolError('不支持或不完整的配置。当前版本支持配置 0 的基础层。')
@@ -277,10 +287,14 @@ export function snapshotValidatedMacros(s: Snapshot): Record<number, number[]> {
 }
 
 export function snapshotIsCompatible(s: Snapshot, current: DeviceInfo): boolean {
-  return infoSupportsConfiguration(current) && infoProfile(current) === 0 &&
-    infoProfile(s.info) === 0 &&
-    (infoDeviceID(s.info) === null || infoDeviceID(s.info) === 983) &&
-    [0x0104, 0x0108].includes(infoFirmwareRevision(s.info) ?? -1)
+  if (!infoSupportsConfiguration(current) || infoProfile(current) !== 0 || infoProfile(s.info) !== 0) return false
+  const savedID = infoDeviceID(s.info)
+  const savedFirmware = infoFirmwareRevision(s.info) ?? -1
+  if (infoDeviceID(current) === 983) {
+    return s.device === 'RongYuan M1W 3151:4015' && (savedID === null || savedID === 983) &&
+      [0x0104, 0x0108].includes(savedFirmware)
+  }
+  return s.device === 'RongYuan M7W 3151:4015' && savedID === 1215 && savedFirmware === 0x0100
 }
 
 // ---- 按键功能目录 ----
@@ -328,6 +342,12 @@ export const MODIFIER_LABELS: Record<number, string> = {
   228: '右 Control', 229: '右 Shift', 230: '右 Option', 231: '右 Command',
 }
 
+// Keys exposed through Fn on compact boards remain valid mapping targets.
+const EXTRA_KEY_NAMES: Record<number, string> = {
+  53: '`', 70: 'Print Screen', 71: 'Scroll Lock', 72: 'Pause',
+  73: 'Insert', 74: 'Home', 75: 'Page Up', 76: 'Delete', 77: 'End', 78: 'Page Down',
+}
+
 export function keyDisplayName(key: PhysicalKey): string {
   switch (key.name) {
     case 'U-': return '旋钮逆时针'
@@ -366,10 +386,20 @@ export function allActions(definition: DeviceDefinition): KeyAction[] {
       })
     }
   }
-  return physical.concat(modifiers).concat(KEY_FUNCTIONS)
+  const extraKeys: KeyAction[] = []
+  const extraNames: Record<number, string> = {
+    ...EXTRA_KEY_NAMES,
+    ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [58 + i, `F${i + 1}`])),
+  }
+  for (const [usageText, name] of Object.entries(extraNames)) {
+    const usage = Number(usageText)
+    if (!present.has(usage)) extraKeys.push({ id: `usage-${usage}`, name, category: '按键', record: [0, 0, usage, 0] })
+  }
+  return physical.concat(modifiers, extraKeys, KEY_FUNCTIONS)
 }
 
 export function usageName(usage: number, definition: DeviceDefinition): string {
+  if (usage >= 58 && usage <= 69) return `F${usage - 57}`
   switch (usage) {
     case 0: return '无'
     case 224: return 'Control'
@@ -383,7 +413,7 @@ export function usageName(usage: number, definition: DeviceDefinition): string {
     default: {
       const key = definition.keys.find((k) =>
         k.record[0] === 0 && k.record[1] === 0 && k.record[3] === 0 && k.record[2] === usage)
-      return key ? keyDisplayName(key) : `HID ${usage.toString(16).toUpperCase().padStart(2, '0')}`
+      return key ? keyDisplayName(key) : EXTRA_KEY_NAMES[usage] ?? `HID ${usage.toString(16).toUpperCase().padStart(2, '0')}`
     }
   }
 }
@@ -412,7 +442,8 @@ export function recordLabel(record: KeyRecord | null, definition: DeviceDefiniti
   if (record[0] === 8 && record[1] === 0 && record[2] === 4 && record[3]! <= 4) {
     return `切换键盘配置 ${record[3]! + 1}`
   }
-  const original = definition.keys.find((k) =>
+  // The v4 M7W Fn defaults do not describe the table read from this firmware.
+  const original = definition.model === 'yc500_m7wnosled_soc' ? undefined : definition.keys.find((k) =>
     recordsEqual(definition.defaultFnMatrix.slice(k.index * 4, k.index * 4 + 4), record))
   if (original) return `原厂 Fn + ${keyDisplayName(original)}`
   return '自定义功能'

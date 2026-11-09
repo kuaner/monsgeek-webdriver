@@ -246,6 +246,7 @@ describe('改键', () => {
 
   it('Fn 改键只写 Fn 表并保留普通键', async () => {
     const keyboard = new MockKeyboard()
+    keyboard.revision = 0x0108
     const originalBase = keyboard.matrix.slice()
     await makeClient(keyboard).client.setKey(82, [10, 9, 0, 0], { fn: true })
     expect(keyboard.fn.slice(82 * 4, 82 * 4 + 4)).toEqual([10, 9, 0, 0])
@@ -256,6 +257,7 @@ describe('改键', () => {
 
   it('识别原厂 Siri 动作而不放行其他未知 type-18', async () => {
     const keyboard = new MockKeyboard()
+    keyboard.revision = 0x0108
     expect(recordLabel([18, 0, 227, 44], definition)).toBe('呼出 Siri')
     await makeClient(keyboard).client.setKey(30, [18, 0, 227, 44], { fn: true })
     await expect(makeClient(keyboard).client.setKey(30, [18, 0, 0, 1], { fn: true })).rejects.toThrow(ProtocolError)
@@ -318,6 +320,7 @@ describe('宏', () => {
 
   it('Fn 宏只绑定 Fn 层，并避开普通层已使用的宏槽', async () => {
     const keyboard = new MockKeyboard()
+    keyboard.revision = 0x0108
     keyboard.matrix.splice(78 * 4, 4, 9, 0, 0, 0)
     keyboard.macros[0] = macroEncoded(exampleMacro())
     const base = keyboard.matrix.slice(), previousMacro = keyboard.macros[0]!.slice()
@@ -344,6 +347,7 @@ describe('配置方案', () => {
 
   it('配置切换还原 Fn/宏/灯效/门控', async () => {
     const keyboard = new MockKeyboard()
+    keyboard.revision = 0x0108
     const { client } = makeClient(keyboard)
     keyboard.matrix.splice(312, 4, 9, 0, 3, 0)
     keyboard.macros[3] = macroEncoded(exampleMacro())

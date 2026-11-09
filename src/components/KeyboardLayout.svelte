@@ -1,8 +1,8 @@
 <script lang="ts">
   import KeyboardArtwork from './KeyboardArtwork.svelte'
-  import { controller, definition, isKnobKey, keyDisplayName, recordLabel } from '../lib/state/controller.svelte'
+  import { controller, isKnobKey, recordLabel } from '../lib/state/controller.svelte'
   import { recordsEqual } from '../lib/protocol/core'
-  import { keyBounds, knobBounds, KEYBOARD_HEIGHT, KEYBOARD_WIDTH } from '../lib/keyboard/geometry'
+  import { keyBounds, knobBounds, swapModifierPositions, KEYBOARD_HEIGHT, KEYBOARD_WIDTH } from '../lib/keyboard/geometry'
 
   let wrapWidth = $state(0)
   let viewportHeight = $state(window.innerHeight)
@@ -10,11 +10,15 @@
   // 键盘是唯一主体：在可用宽度和高度内尽可能大。
   const scale = $derived(Math.min((wrapWidth - 12) / KEYBOARD_WIDTH, (viewportHeight - 205) / KEYBOARD_HEIGHT))
   const connected = $derived(controller.connected)
+  const definition = $derived(controller.definition)
 </script>
 
 <svelte:window onresize={() => (viewportHeight = window.innerHeight)} />
 
-{#if connected}
+{#if connected && !controller.modelName}
+  <div class="stage-empty"><div class="empty"><h2>暂不支持此键盘</h2>
+    <p>已连接的设备没有对应的键盘布局与配置定义。</p></div></div>
+{:else if connected}
   <div class="kb-scroll" bind:clientWidth={wrapWidth}>
     {#if scale > 0.1}
       <div class="kb" style={`width:${KEYBOARD_WIDTH * scale}px;height:${KEYBOARD_HEIGHT * scale}px`}>
@@ -22,21 +26,21 @@
           selectedIndex={controller.selectedKeyIndex} {hoveredIndex} />
         {#each definition.keys as key (key.index)}
           {@const knob = isKnobKey(key)}
-          {@const bounds = knob ? knobBounds(key) : keyBounds(key, controller.macMode, definition.keys)}
+          {@const bounds = knob ? knobBounds(key) : keyBounds(key, swapModifierPositions(definition, controller.macMode), definition.keys)}
           {@const keyMatrix = knob ? controller.matrix : controller.activeMatrix}
-          {@const record = keyMatrix
+          {@const record = key.index >= 0 && keyMatrix
             ? keyMatrix.slice(key.index * 4, key.index * 4 + 4)
             : null}
           {@const modified = controller.layer === 'base' && record !== null && !recordsEqual(record, key.record)}
-          {@const label = record ? (controller.layer === 'fn' && !knob && record.every((b) => b === 0) ? '未设置' : recordLabel(record, definition)) : '未读取'}
+          {@const label = key.index < 0 ? '原厂未提供矩阵位置' : record ? (controller.layer === 'fn' && !knob && record.every((b) => b === 0) ? '未设置' : recordLabel(record, definition)) : '未读取'}
           <button
             class="kb-key"
             class:kb-knob={knob}
-            class:selected={controller.selectedKeyIndex === key.index}
+            class:selected={key.index >= 0 && controller.selectedKeyIndex === key.index}
             class:modified={modified}
             style={`left:${bounds.x * scale}px;top:${bounds.y * scale}px;width:${bounds.width * scale}px;height:${bounds.height * scale}px`}
-            title={`${controller.layer === 'fn' && !knob ? 'Fn + ' : ''}${keyDisplayName(key)} → ${label}`}
-            disabled={controller.busy}
+            title={`${controller.layer === 'fn' && !knob ? 'Fn + ' : ''}${controller.physicalKeyName(key)} → ${label}`}
+            disabled={controller.busy || key.index < 0}
             onpointerenter={() => (hoveredIndex = key.index)}
             onpointerleave={() => { if (hoveredIndex === key.index) hoveredIndex = -1 }}
             onfocus={() => (hoveredIndex = key.index)}

@@ -9,7 +9,7 @@ import type {
 import {
   QUERIES, BULK_RESPONSE_CMDS, ProtocolError, frame, singleKeyFrame, validateKeyRecord,
   lightFrame, lightEquals, parseLight, keyboardOptionsFrame, macroFrames, hexEncode,
-  infoSupportsConfiguration, infoProfile, infoLight, infoKeyboardOptions, infoDeviceID,
+  infoSupportsConfiguration, infoSupportsFnConfiguration, infoProfile, infoLight, infoKeyboardOptions, infoDeviceID,
   mergeInfo, makeSnapshot, snapshotValidatedMatrix, snapshotValidatedFnMatrix,
   snapshotValidatedMacros, snapshotIsCompatible, macroEncoded,
 } from './core'
@@ -28,7 +28,13 @@ export interface SetLightOptions {
 }
 
 export class M1WClient {
-  private identityValidated = false
+  private identity: DeviceInfo | null = null
+
+  private get writeDelay(): number {
+    // The v4 YC500 driver waits 2 seconds after writes on macOS. Keep the
+    // already verified M1W timing, and follow v4's timing for the M7W.
+    return this.identity && infoDeviceID(this.identity) === 1215 ? 2000 : 500
+  }
 
   constructor(
     private readonly transport: ReportTransport,
@@ -78,13 +84,14 @@ export class M1WClient {
       throw new ProtocolError(
         `此设备或固件尚未验证，当前只读取状态。设备 ID：${device === null ? '未知' : device}。`)
     }
-    this.identityValidated = true
+    this.identity = info
   }
 
-  private async requireProfile0(): Promise<void> {
-    if (!this.identityValidated) await this.validateIdentity(await this.status([0x80, 0x8f]))
+  private async requireProfile0(): Promise<DeviceInfo> {
+    if (!this.identity) await this.validateIdentity(await this.status([0x80, 0x8f]))
     const profile = (await this.query(0x85))[1]!
     if (profile !== 0) throw new ProtocolError(`当前版本支持配置 0，请先切回该配置。当前为 ${profile}。`)
+    return this.identity!
   }
 
   /** 整块读取前先查询版本建立“栅栏”，识别未更新的寄存器残留。 */
@@ -136,8 +143,8 @@ export class M1WClient {
   /** 仅由用户手动点“保存配置”调用。 */
   async snapshot(name: string | null = null, includeExtras = true): Promise<Snapshot> {
     const info = await this.info()
-    if (infoDeviceID(info) !== 983 || infoProfile(info) !== 0) {
-      throw new ProtocolError('手动配置保存当前支持 M1W 设备 983 的配置 0。')
+    if (!infoSupportsConfiguration(info) || infoProfile(info) !== 0) {
+      throw new ProtocolError('手动配置保存仅支持已验证设备的配置 0。')
     }
     const matrix = await this.readMatrix()
     const fn = includeExtras ? await this.readMatrix({ fn: true }) : null
@@ -163,13 +170,16 @@ export class M1WClient {
       data[7] = (255 - sum) & 0xff
     }
     await this.transport.write(data)
-    await this.pause(500) // 原厂前端的写后稳定间隔；仅靠读回不能替代
+    await this.pause(this.writeDelay) // 写后稳定间隔；仅靠读回不能替代
   }
 
   async setKey(index: number, record: KeyRecord, options: { fn?: boolean } = {}): Promise<ChangeResult> {
     const fn = options.fn ?? false
     validateKeyRecord(singleKeyFrame(index, record).slice(8, 12))
-    await this.requireProfile0()
+    const info = await this.requireProfile0()
+    if (fn && !infoSupportsFnConfiguration(info)) {
+      throw new ProtocolError('此固件不支持已验证的 Fn 写入，Fn 层仅可读取。')
+    }
     const before = await this.readKey(index, { fn })
     if (recordsEq(before, record)) {
       return { changedKeyIndices: [], lightChanged: false, verified: true }
@@ -246,7 +256,7 @@ export class M1WClient {
       }
       if (lightChanged) {
         await this.transport.write(lightFrame(desired))
-        await this.pause(500)
+        await this.pause(this.writeDelay)
       } else {
         await this.pause(120)
       }
@@ -261,7 +271,7 @@ export class M1WClient {
       try {
         await this.transport.write(frame([0x06, ...oldOptions.slice(1, 7)]))
         await this.transport.write(lightFrame(old))
-        await this.pause(500)
+        await this.pause(this.writeDelay)
         const restored = await this.liveInfo()
         if (!lightEquals(infoLight(restored)!, old) ||
             infoKeyboardOptions(restored)![2] !== oldOptions[2]) {
@@ -277,7 +287,8 @@ export class M1WClient {
 
   async writeMacro(slot: number, bytes: number[]): Promise<void> {
     const frames = macroFrames(slot, bytes)
-    await this.requireProfile0()
+    const info = await this.requireProfile0()
+    if (infoDeviceID(info) === 1215) throw new ProtocolError('M7W 的宏写入尚未验证。')
     for (const f of frames) {
       await this.transport.write(f)
       await this.pause(20)
@@ -295,7 +306,10 @@ export class M1WClient {
     if (!(index >= 0 && index < 126)) throw new ProtocolError('无效的矩阵编号。')
     if (![0, 1, 2].includes(playback)) throw new ProtocolError('无效的宏播放方式。')
     const bytes = macroEncoded(macro)
-    await this.requireProfile0()
+    const info = await this.requireProfile0()
+    if (infoDeviceID(info) === 1215 || (options.fn && !infoSupportsFnConfiguration(info))) {
+      throw new ProtocolError('此设备的宏写入尚未验证。')
+    }
     const matrix = await this.readMatrix({ verify: false })
     const fn = await this.readMatrix({ fn: true, verify: false })
     const targetMatrix = options.fn ? fn : matrix
@@ -341,7 +355,7 @@ export class M1WClient {
     const currentInfo = await this.info()
     await this.validateIdentity(currentInfo)
     if (!snapshotIsCompatible(saved, currentInfo)) {
-      throw new ProtocolError('此配置与当前键盘不兼容。支持同一 M1W 的 1.04 / 1.08 配置迁移。')
+      throw new ProtocolError('此配置与当前键盘型号或固件不兼容。')
     }
     const current = await this.readMatrix({ verify: false })
     const oldFn = fn ? await this.readMatrix({ fn: true, verify: false }) : null
@@ -355,13 +369,21 @@ export class M1WClient {
         if (!oldFn.slice(i * 4, i * 4 + 4).every((b, j) => b === fn[i * 4 + j])) fnChanges.push(i)
       }
     }
+    if (fnChanges.length && !infoSupportsFnConfiguration(currentInfo)) {
+      throw new ProtocolError('配置含无法在此固件上写入的 Fn 差异，未进行任何修改。')
+    }
     for (const i of keyChanges) validateKeyRecord(desired.slice(i * 4, i * 4 + 4))
     for (const i of fnChanges) validateKeyRecord(fn!.slice(i * 4, i * 4 + 4))
+    const changedMacros: Array<[number, number[]]> = []
     for (const [slotText, data] of Object.entries(macros)) {
       const slot = Number(slotText)
       const currentMacro = await this.readMacro(slot)
-      if (!currentMacro.every((b, i) => b === data[i])) await this.writeMacro(slot, data)
+      if (!currentMacro.every((b, i) => b === data[i])) changedMacros.push([slot, data])
     }
+    if (changedMacros.length && infoDeviceID(currentInfo) === 1215) {
+      throw new ProtocolError('配置含未验证的 M7W 宏差异，未进行任何修改。')
+    }
+    for (const [slot, data] of changedMacros) await this.writeMacro(slot, data)
     const changed: number[] = []
     for (const i of keyChanges) {
       await this.setKey(i, desired.slice(i * 4, i * 4 + 4))
@@ -381,7 +403,7 @@ export class M1WClient {
     }
     if (lightingChanged && savedLight) {
       await this.transport.write(lightFrame(savedLight))
-      await this.pause(500)
+      await this.pause(this.writeDelay)
     }
     const after = await this.readMatrix({ verify: false })
     if (!after.every((b, i) => b === desired[i])) throw new ProtocolError('配置切换后的键位校验失败。')

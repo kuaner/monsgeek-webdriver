@@ -22,7 +22,7 @@
     if (controller.connected && controller.info) {
       const mode = controller.connectionMode === 'bluetooth' ? '蓝牙' : controller.connectionMode === 'dongle' ? '2.4G' : 'USB'
       const battery = controller.battery === null ? '' : ` · 电量 ${controller.battery}%`
-      return `${mode} · 固件 ${infoFirmware(controller.info)}${battery}` + (controller.canConfigure ? '' : ' · 只读')
+      return `${controller.modelName ?? '未知设备'} · ${mode} · 固件 ${infoFirmware(controller.info)}${battery}` + (controller.canConfigure ? '' : ' · 只读')
     }
     return controller.connectionDescription
   })
@@ -71,7 +71,7 @@
 
 <div class="kb-under caption">
   {#if controller.connected}
-    {controller.layer === 'fn' ? '点击按键设置 Fn 组合，点击旋钮设置旋钮动作' : '点击按键或旋钮改键'}<span class="sep">|</span>
+    {controller.layer === 'fn' ? (controller.canConfigureFn ? '点击按键设置 Fn 组合' : 'Fn 组合当前仅支持查看') : '点击按键改键'}<span class="sep">|</span>
     <i class="dot" style="background:var(--accent)"></i>已选
     {#if controller.layer === 'base'}<i class="dot amber" style="background:var(--amber)"></i>已改键{/if}
   {:else}

@@ -2,7 +2,7 @@
   import type { DeviceDefinition } from '../lib/protocol/types'
   import { isKnobKey, recordsEqual } from '../lib/protocol/core'
   import { keycapLegend, mappedKeycapLegend } from '../lib/keyboard/legends'
-  import { keyBounds, knobSector } from '../lib/keyboard/geometry'
+  import { keyBounds, knobSector, swapModifierPositions } from '../lib/keyboard/geometry'
 
   let { definition, matrix, layer, selectedIndex, hoveredIndex, mac }: {
     definition: DeviceDefinition; matrix: number[] | null; layer: 'base' | 'fn'; selectedIndex: number; hoveredIndex: number; mac: boolean
@@ -64,12 +64,12 @@
 
   {#each definition.keys as key (key.index)}
     {#if !isKnobKey(key)}
-      {@const bounds = keyBounds(key, mac, definition.keys)}
+      {@const bounds = keyBounds(key, swapModifierPositions(definition, mac), definition.keys)}
       {@const { x, y, width, height } = bounds}
-      {@const record = matrix?.slice(key.index * 4, key.index * 4 + 4) ?? null}
+      {@const record = key.index >= 0 ? matrix?.slice(key.index * 4, key.index * 4 + 4) ?? null : null}
       {@const remapped = record !== null && !recordsEqual(record, key.record)}
       {@const display = remapped && record ? mappedKeycapLegend(record, definition, mac) : legend(key.name)}
-      <g class="keycap" class:modified={layer === 'base' && remapped} class:selected={selectedIndex === key.index}
+      <g class="keycap" class:modified={layer === 'base' && remapped} class:selected={key.index >= 0 && selectedIndex === key.index}
         class:hovered={hoveredIndex === key.index} transform={`translate(${x} ${y})`}>
         <defs>
           <linearGradient id={`key-shade-${key.index}`} x1="0" y1="0" x2={width} y2="0" gradientUnits="userSpaceOnUse">
@@ -102,16 +102,18 @@
     {/if}
   {/each}
 
-  <circle cx="601" cy="42" r="20.5" fill="#0a0b0d" />
-  <circle class="knob-face" cx="601" cy="41" r="18.3" fill="url(#knob-face)" />
-  {#each [6, 94, 95] as index (index)}
-    {#if selectedIndex === index || hoveredIndex === index}
-      <path class="knob-sector" class:selected={selectedIndex === index} d={knobSector(index)} />
-    {/if}
-  {/each}
-  <g class="knob-guides" text-anchor="middle" dominant-baseline="middle" aria-hidden="true">
-    <text x="588.5" y="41">↶</text>
-    <circle cx="601" cy="41" r="1.6" />
-    <text x="613.5" y="41">↷</text>
-  </g>
+  {#if definition.keys.some(isKnobKey)}
+    <circle cx="601" cy="42" r="20.5" fill="#0a0b0d" />
+    <circle class="knob-face" cx="601" cy="41" r="18.3" fill="url(#knob-face)" />
+    {#each [6, 94, 95] as index (index)}
+      {#if selectedIndex === index || hoveredIndex === index}
+        <path class="knob-sector" class:selected={selectedIndex === index} d={knobSector(index)} />
+      {/if}
+    {/each}
+    <g class="knob-guides" text-anchor="middle" dominant-baseline="middle" aria-hidden="true">
+      <text x="588.5" y="41">↶</text>
+      <circle cx="601" cy="41" r="1.6" />
+      <text x="613.5" y="41">↷</text>
+    </g>
+  {/if}
 </svg>

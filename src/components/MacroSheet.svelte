@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { controller, definition, PLAYBACKS, keyDisplayName } from '../lib/state/controller.svelte'
+  import { controller, PLAYBACKS } from '../lib/state/controller.svelte'
   import { chooser } from '../lib/state/chooser.svelte'
   import { usageChoices } from '../lib/state/actions'
   import { macroEncoded, usageName } from '../lib/protocol/core'
@@ -86,7 +86,7 @@
 {#if controller.macroSheetOpen}
   <div class="overlay">
     <div class="sheet wide macro-sheet" role="dialog" aria-modal="true" aria-labelledby="macro-title">
-      <h2 id="macro-title">录制 Fn + {controller.selectedKey ? keyDisplayName(controller.selectedKey) : '按键'} 的宏</h2>
+      <h2 id="macro-title">录制 Fn + {controller.selectedKey ? controller.physicalKeyName(controller.selectedKey) : '按键'} 的宏</h2>
       <p>宏会按顺序执行一串按键，例如按一次 Fn 组合，执行 Command + C。单独按键的作用不变。</p>
 
       <div class="macro-record-row">
@@ -133,8 +133,8 @@
             </select>
             <button class="chooser-button usage-chooser" disabled={recording}
               aria-label={`第 ${index + 1} 步按键`}
-              onclick={(e) => chooser.open(e.currentTarget, usageChoices(false), String(event.usage), (id) => (event.usage = Number(id)))}>
-              <span>{usageName(event.usage, definition)}</span>
+              onclick={(e) => chooser.open(e.currentTarget, usageChoices(false, controller.definition), String(event.usage), (id) => (event.usage = Number(id)))}>
+              <span>{usageName(event.usage, controller.definition)}</span>
             </button>
             <label class="caption" for={`delay-${index}`}>之后等待</label>
             <input id={`delay-${index}`} class="delay" type="number" min="0" max="65535" disabled={recording}

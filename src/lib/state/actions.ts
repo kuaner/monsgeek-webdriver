@@ -1,7 +1,7 @@
 // 按键/usage 选择数据：分组（修饰键/字母/数字/功能键/其他）+ 组合与宏共用的 usage 列表。
 
-import { definition } from './controller.svelte'
-import { keyDisplayName, MODIFIER_LABELS, usageName } from '../protocol/core'
+import { allActions, MODIFIER_LABELS } from '../protocol/core'
+import type { DeviceDefinition } from '../protocol/types'
 import type { ChooserItem } from './chooser.svelte'
 
 export { MODIFIER_LABELS }
@@ -63,19 +63,19 @@ function byGroupOrder(a: ChooserItem, b: ChooserItem): number {
 }
 
 /** 组合键/宏事件用 usage 列表（含全部修饰键，含右修饰键）。 */
-export function usageChoices(includeNone: boolean): ChooserItem[] {
+export function usageChoices(includeNone: boolean, definition: DeviceDefinition): ChooserItem[] {
   const seen = new Set<number>()
   const list: ChooserItem[] = []
   for (const usage of [224, 225, 226, 227, 228, 229, 230, 231]) {
     seen.add(usage)
     list.push({ id: String(usage), label: MODIFIER_LABELS[usage]!, group: '修饰键' })
   }
-  for (const k of definition.keys) {
-    if (k.record[0] !== 0 || k.record[1] !== 0 || k.record[3] !== 0) continue
+  for (const k of allActions(definition)) {
+    if (k.category !== '按键' || k.record[0] !== 0 || k.record[1] !== 0 || k.record[3] !== 0) continue
     const usage = k.record[2]!
     if (usage === 0 || seen.has(usage)) continue
     seen.add(usage)
-    list.push({ id: String(usage), label: keyDisplayName(k), group: keyGroup(usage) })
+    list.push({ id: String(usage), label: k.name, group: keyGroup(usage) })
   }
   list.sort(byGroupOrder)
   if (includeNone) list.unshift({ id: '0', label: '无', group: '' })

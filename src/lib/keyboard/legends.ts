@@ -1,5 +1,5 @@
-import { recordLabel, recordsEqual } from '../protocol/core'
-import type { DeviceDefinition, KeyRecord } from '../protocol/types'
+import { keyDisplayName, recordLabel, recordsEqual } from '../protocol/core'
+import type { DeviceDefinition, KeyRecord, PhysicalKey } from '../protocol/types'
 
 const legends: Record<string, string> = {
   '`': '`  ~', '1': '1  !', '2': '2  @', '3': '3  #', '4': '4  $', '5': '5  %',
@@ -19,6 +19,16 @@ const macLegends: Record<string, string> = {
 /** 按键盘的 Mac/Windows 模式命名修饰键，实体键位坐标与设备矩阵不变。 */
 export function keycapLegend(name: string, mac: boolean): string {
   return (mac ? macLegends[name] : undefined) ?? legends[name] ?? name
+}
+
+/** M7W 官方布局使用固定的 Win/Alt 实体标识，不推断拨杆的输出转换。 */
+export function physicalKeyDisplayName(key: PhysicalKey, definition: DeviceDefinition): string {
+  if (definition.model === 'yc500_m7wnosled_soc') {
+    if (key.name === 'Win') return '左 Win'
+    if (key.name === 'Alt') return '左 Alt'
+    if (key.name === 'r_Alt') return '右 Alt'
+  }
+  return keyDisplayName(key)
 }
 /** 将已改键的实际作用写在键帽上，完整信息仍由按键提示与编辑器显示。 */
 export function mappedKeycapLegend(record: KeyRecord, definition: DeviceDefinition, mac: boolean): string {

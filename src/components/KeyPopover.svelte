@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { controller, definition, PLAYBACKS, isKnobKey, keyDisplayName } from '../lib/state/controller.svelte'
+  import { controller, PLAYBACKS, isKnobKey } from '../lib/state/controller.svelte'
   import { chooser } from '../lib/state/chooser.svelte'
   import { KEY_GROUPS, keyChoiceItems, keyGroup, usageChoices } from '../lib/state/actions'
   import { recordsEqual, usageName } from '../lib/protocol/core'
-  import { infoFirmwareRevision } from '../lib/protocol/core'
 
   const enabled = $derived(controller.canEditKey)
   const isModified = $derived(
@@ -63,27 +62,27 @@
     <header class="kp-head">
       {#if controller.layer === 'fn'}
         <div class="kp-layer-title">
-          <b>Fn + {controller.selectedKey ? keyDisplayName(controller.selectedKey) : '—'}</b>
+          <b>Fn + {controller.selectedKey ? controller.physicalKeyName(controller.selectedKey) : '—'}</b>
           <span>当前：{controller.currentMapping}</span>
           <span>单按：{controller.baseMapping}（保留）</span>
         </div>
       {:else if isModified}
         <div class="kp-map">
-          <b>{controller.selectedKey ? keyDisplayName(controller.selectedKey) : '—'}</b>
+          <b>{controller.selectedKey ? controller.physicalKeyName(controller.selectedKey) : '—'}</b>
           <svg class="kp-arrow" width="26" height="14" viewBox="0 0 26 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M2 7h20m0 0-5-5m5 5-5 5" />
           </svg>
           <b class="kp-map-target" title={controller.currentMapping}>{controller.currentMapping}</b>
         </div>
       {:else}
-        <b class="kp-plain">{controller.selectedKey ? keyDisplayName(controller.selectedKey) : '—'}</b>
+        <b class="kp-plain">{controller.selectedKey ? controller.physicalKeyName(controller.selectedKey) : '—'}</b>
       {/if}
       <button class="ghost kp-close" onclick={() => controller.closeRemap()} aria-label="关闭改键">关闭</button>
     </header>
 
     {#if controller.selectedKey?.name === 'FN'}
       <p class="kp-hint">Fn 是组合键的入口，请选择其他按键设置其单按或 Fn 组合。</p>
-    {:else if controller.layer === 'fn' && controller.info && infoFirmwareRevision(controller.info) !== 0x0108}
+    {:else if controller.layer === 'fn' && controller.info && !controller.canConfigureFn}
       <p class="kp-hint">此固件的 Fn 写入尚未验证，当前可读取 Fn 映射。</p>
     {:else if controller.layer === 'fn' && controller.currentRecord && !controller.canEditKey && !controller.busy}
       <p class="kp-hint">这个原厂动作暂不能安全编辑，当前值会保留。</p>
@@ -156,9 +155,9 @@
             class="chooser-button"
             style="width:118px"
             disabled={!enabled}
-            onclick={(e) => chooser.open(e.currentTarget, usageChoices(false), String(controller.chordKey), (id) => (controller.chordKey = Number(id)))}
+            onclick={(e) => chooser.open(e.currentTarget, usageChoices(false, controller.definition), String(controller.chordKey), (id) => (controller.chordKey = Number(id)))}
           >
-            <span>{usageName(controller.chordKey, definition)}</span>
+            <span>{usageName(controller.chordKey, controller.definition)}</span>
           </button>
         </div>
         <div class="row">
@@ -167,9 +166,9 @@
             class="chooser-button"
             style="width:118px"
             disabled={!enabled}
-            onclick={(e) => chooser.open(e.currentTarget, usageChoices(true), String(controller.chordSecondary), (id) => (controller.chordSecondary = Number(id)))}
+            onclick={(e) => chooser.open(e.currentTarget, usageChoices(true, controller.definition), String(controller.chordSecondary), (id) => (controller.chordSecondary = Number(id)))}
           >
-            <span>{controller.chordSecondary === 0 ? '无' : usageName(controller.chordSecondary, definition)}</span>
+            <span>{controller.chordSecondary === 0 ? '无' : usageName(controller.chordSecondary, controller.definition)}</span>
           </button>
         </div>
       {:else if controller.mappingMode === 'macro'}
